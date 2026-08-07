@@ -24,7 +24,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\Bootstrap.ps1
 ```
 
-`Bootstrap.ps1` downloads and installs the Aion Instruct Preview model framework, then builds and launches the chat app. First launch takes ~3-5 minutes to compile the model for your NPU; every launch after is near-instant.
+`Bootstrap.ps1` downloads and installs the Aion Instruct Preview model framework, prepares the QNN execution provider on ARM64, then builds and launches the chat app. First launch takes ~3-5 minutes to compile the model for your NPU; every launch after is near-instant.
 
 > `Bootstrap.ps1` downloads the signed release from this repo's public GitHub releases over plain HTTPS. For the manual steps, Visual Studio, or if you hit a snag, see [Prerequisites](#prerequisites) and [Quickstart details](#quickstart-details).
 >
@@ -105,7 +105,7 @@ A few notes on the steps in the [Quickstart](#quickstart) above:
 
 - **Where to clone.** Put the repo under your user profile (e.g. `C:\repos` or `%USERPROFILE%`) — **not** under `C:\Windows\System32`. See the [Troubleshooting](#troubleshooting) note on System32 for why an elevated prompt's default directory breaks the build.
 - **`Set-ExecutionPolicy`.** Required on a machine with the default `Restricted` policy — otherwise `.\Bootstrap.ps1` fails with *"Bootstrap.ps1 cannot be loaded because running scripts is disabled on this system"*, even after a clean `git clone`. It's scoped to the current process, needs no admin, and reverts when you close the window.
-- **What `Bootstrap.ps1` does.** Detects your arch, enables Developer Mode if needed, pulls the latest signed Aion Instruct Preview release from this repo's public GitHub releases over HTTPS, installs the framework MSIX, drops the SDK NuGet, then builds and launches AionInstructPreview.Chat via `dotnet run`. Re-runs are idempotent.
+- **What `Bootstrap.ps1` does.** Detects your arch, enables Developer Mode if needed, pulls the latest signed Aion Instruct Preview release from this repo's public GitHub releases over HTTPS, installs the framework MSIX, drops the SDK NuGet, installs the QNN execution provider on ARM64 when its AppX package is missing, then builds and launches AionInstructPreview.Chat via `dotnet run`. Re-runs are idempotent.
 - **First launch.** Sits on **"Loading Aion Instruct Preview model…"** for ~3-5 minutes while the runtime compiles its QDQ ONNX models for the picked execution provider (QNN on Snapdragon NPU). This is a one-shot per device — every prompt after that is sub-second to first token on NPU.
 
 ---

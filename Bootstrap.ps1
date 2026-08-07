@@ -6,7 +6,8 @@
 #   2. Downloads the latest signed Aion Instruct Preview release from GitHub if the
 #      framework MSIX is not already installed; installs it.
 #   3. Drops the SDK NuGet into ./nuget-local/.
-#   4. Builds and launches AionInstructPreview.Chat via 'dotnet run' (which
+#   4. Acquires and registers the QNN execution provider on ARM64.
+#   5. Builds and launches AionInstructPreview.Chat via 'dotnet run' (which
 #      registers the loose build-output layout as a development package).
 #
 # Re-running is idempotent: the framework at the matching version is detected
@@ -16,7 +17,7 @@
 #
 # Usage:
 #     .\Bootstrap.ps1
-#     .\Bootstrap.ps1 -SkipLaunch    # install prereqs only, do not build/launch
+#     .\Bootstrap.ps1 -SkipLaunch    # prepare prereqs only, do not build/launch the chat app
 #     .\Bootstrap.ps1 -Verbose       # show every step
 #
 # Stuck after Bootstrap finishes? Run scripts\Diagnose-AionInstructPreview.ps1 -- it
@@ -355,13 +356,41 @@ if (Test-Path $expectedNupkg) {
     Write-OK "Dropped $expectedNupkgName in nuget-local/"
 }
 
+# --- 5a. Acquire QNN execution provider (if needed) ------------------------
+# Keep this explicitly ARM64-gated so future x64 support does not attempt to
+# acquire Qualcomm's QNN provider.
+if ($arch -eq 'ARM64') {
+    $qnnPackages = @(Get-AppxPackage -Name 'MicrosoftCorporationII.WinML.Qualcomm.QNN.EP.1.8*' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Architecture -eq $arch })
+    if ($qnnPackages.Count -eq 0) {
+        $acquireQnnProject = Join-Path $PSScriptRoot 'tools\AcquireQnnEp\AcquireQnnEp.csproj'
+        Write-Step 'Preparing the QNN execution provider (this may download components) ...'
+        & dotnet run --project "$acquireQnnProject" -c Release -p:Platform=$arch | Out-Host
+        $acquireQnnExitCode = $LASTEXITCODE
+        if ($acquireQnnExitCode -ne 0) {
+            Stop-WithRecovery `
+                -Title "QNN execution provider acquisition failed (exit code $acquireQnnExitCode)" `
+                -Recovery @(
+                    'Re-run the acquisition tool directly for full output:',
+                    "    dotnet run --project `"$acquireQnnProject`" -c Release -p:Platform=$arch",
+                    "Verify Windows App Runtime 1.8 v$War18MinVersion or newer is installed:",
+                    "    Get-AppxPackage -Name $War18PkgId",
+                    'Check internet access and install the latest Snapdragon NPU/QNN drivers.'
+                )
+        }
+        Write-OK 'QNN execution provider is ready'
+    }
+} else {
+    Write-Skip "QNN execution provider acquisition skipped for $arch"
+}
+
 # --- 6. Build, register (loose layout) and launch via dotnet run ------------
 # dotnet run builds, registers the loose-layout development package, and launches the app.
 $csproj = Join-Path $PSScriptRoot 'AionInstructPreview.Chat.csproj'
 
 if ($SkipLaunch) {
     Write-Host ''
-    Write-OK 'Bootstrap complete (skipped build/launch).'
+    Write-OK 'Bootstrap complete (skipped chat app build/launch).'
     Write-Host 'Build and run manually:' -ForegroundColor Cyan
     Write-Host "    dotnet run --project `"$csproj`" --launch-profile `"AionInstructPreview.Chat`" -c Release -p:Platform=$arch" -ForegroundColor Cyan
     return

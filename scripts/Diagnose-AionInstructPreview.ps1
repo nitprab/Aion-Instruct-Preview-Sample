@@ -28,6 +28,21 @@ $script:passes = 0
 $script:warns  = 0
 $script:fails  = 0
 
+# Detect the native machine architecture so package checks match the hardware,
+# even when PowerShell is running under emulation.
+$emulatedArch = $env:PROCESSOR_ARCHITECTURE
+$nativeArch   = $env:PROCESSOR_ARCHITEW6432
+if ($nativeArch) {
+    $rawArch = $nativeArch
+} else {
+    $rawArch = $emulatedArch
+}
+
+$arch = switch ($rawArch) {
+    'ARM64' { 'ARM64' }
+    default { $null }
+}
+
 function Write-Check {
     param(
         [ValidateSet('PASS','WARN','FAIL','INFO')] [string]$Status,
@@ -73,17 +88,16 @@ $ci = Get-ComputerInfo -Property CsManufacturer, CsModel, CsProcessors -ErrorAct
 if ($ci) {
     $proc = $ci.CsProcessors | Select-Object -First 1
     $procName = if ($proc) { $proc.Name } else { '(unknown)' }
-    $arch = $env:PROCESSOR_ARCHITECTURE
-    $detail = "Manufacturer: $($ci.CsManufacturer)`nModel: $($ci.CsModel)`nProcessor: $procName`nPROCESSOR_ARCHITECTURE: $arch"
+    $detail = "Manufacturer: $($ci.CsManufacturer)`nModel: $($ci.CsModel)`nProcessor: $procName`nProcess architecture: $emulatedArch`nNative architecture: $nativeArch`nResolved architecture: $rawArch"
 
     if ($arch -eq 'ARM64' -and $procName -match 'Snapdragon|Qualcomm|Hexagon|Oryon') {
         Write-Check PASS 'Snapdragon ARM64 (Copilot+ PC class) -- QNN NPU path expected' $detail
     } elseif ($arch -eq 'ARM64') {
         Write-Check WARN 'ARM64 but processor name doesn''t match a known Snapdragon SKU' $detail
-    } elseif ($arch -eq 'AMD64') {
+    } elseif ($rawArch -eq 'AMD64') {
         Write-Check WARN 'x64 host -- x64 (Intel/AMD) support is coming soon; this preview supports ARM64/Snapdragon (QNN NPU) only' $detail
     } else {
-        Write-Check WARN ('Unexpected architecture: ' + $arch) $detail
+        Write-Check WARN ('Unexpected architecture: ' + $rawArch) $detail
     }
 } else {
     Write-Check WARN 'Get-ComputerInfo returned nothing -- can''t determine host class'
@@ -145,6 +159,9 @@ function Check-Package {
 Check-Package -Name 'Microsoft.AionInstructPreview.Framework.1.0' -Friendly 'Aion Instruct Preview framework MSIX'
 Check-Package -Name 'Microsoft.WindowsAppRuntime.2' -Friendly 'Windows App Runtime 2' -MinVersion '2.0.1.0'
 Check-Package -Name 'Microsoft.WindowsAppRuntime.1.8' -Friendly 'Windows App Runtime 1.8' -MinVersion '8000.836.2153.0'
+if ($arch -eq 'ARM64') {
+    Check-Package -Name 'MicrosoftCorporationII.WinML.Qualcomm.QNN.EP.1.8*' -Friendly 'Qualcomm QNN execution provider 1.8'
+}
 Check-Package -Name 'AionInstructPreviewChat' -Friendly 'AionInstructPreview.Chat consumer app'
 
 # Wider EP package sweep -- names vary by SKU / channel.

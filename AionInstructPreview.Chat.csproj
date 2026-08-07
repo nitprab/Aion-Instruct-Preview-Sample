@@ -35,7 +35,7 @@
     <AssemblyName>AionInstructPreview.Chat</AssemblyName>
 
     <!-- Keep sibling sample projects out of this root project's default item globs. -->
-    <DefaultItemExcludes>$(DefaultItemExcludes);unpackaged-wpf\**;unpackaged-console\**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);unpackaged-wpf\**;unpackaged-console\**;tools\**</DefaultItemExcludes>
     <Platforms>ARM64</Platforms>
     <!-- Default unqualified builds to the machine's native architecture for MSIX packaging. -->
     <Platform Condition="'$(Platform)' == '' Or '$(Platform)' == 'AnyCPU'">$([MSBuild]::ValueOrDefault('$(PROCESSOR_ARCHITEW6432)', '$(PROCESSOR_ARCHITECTURE)'))</Platform>
