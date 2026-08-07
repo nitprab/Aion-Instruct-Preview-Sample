@@ -190,6 +190,38 @@ if ($devMode -ne 1) {
 }
 Write-OK 'Developer Mode enabled'
 
+# --- 2c. NuGet cache/package path env var validation ------------------------
+# NuGet honors NUGET_HTTP_CACHE_PATH and NUGET_PACKAGES for restore. If a user
+# points either at a path that doesn't exist, restore fails deep in the build
+# with a confusing error -- validate up front and fail fast with recovery steps.
+# Each variable is checked independently; an unset variable is not an error.
+function Test-NuGetPathEnvVar {
+    param([string]$Name)
+
+    $value = [Environment]::GetEnvironmentVariable($Name)
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        return
+    }
+
+    if (-not (Test-Path -LiteralPath $value -PathType Container)) {
+        Stop-WithRecovery `
+            -Title "$Name is set to '$value', which is not accessible" `
+            -Recovery @(
+                'Please point the variable at an existing directory, create it, or clear it:',
+                "    New-Item -ItemType Directory -Force -Path '$value'",
+                '# or clear it for this session:',
+                "    Remove-Item Env:\$Name",
+                '# or fix it permanently under:',
+                '    Settings -> System -> About -> Advanced system settings -> Environment Variables'
+            )
+    }
+
+    Write-OK "$Name -> $value"
+}
+
+Test-NuGetPathEnvVar -Name 'NUGET_HTTP_CACHE_PATH'
+Test-NuGetPathEnvVar -Name 'NUGET_PACKAGES'
+
 # --- 3. Discover latest release via the public GitHub Releases API ----------
 # This repo is public, so the latest signed release is fetched straight from
 # the unauthenticated GitHub REST API over HTTPS -- no GitHub CLI, no token,
