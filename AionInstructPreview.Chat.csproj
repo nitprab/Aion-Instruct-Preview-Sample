@@ -36,11 +36,15 @@
 
     <!-- Keep sibling sample projects out of this root project's default item globs. -->
     <DefaultItemExcludes>$(DefaultItemExcludes);unpackaged-wpf\**;unpackaged-console\**;tools\**</DefaultItemExcludes>
-    <Platforms>ARM64</Platforms>
-    <!-- Default unqualified builds to the machine's native architecture for MSIX packaging. -->
-    <Platform Condition="'$(Platform)' == '' Or '$(Platform)' == 'AnyCPU'">$([MSBuild]::ValueOrDefault('$(PROCESSOR_ARCHITEW6432)', '$(PROCESSOR_ARCHITECTURE)'))</Platform>
-    <RuntimeIdentifiers>win-arm64</RuntimeIdentifiers>
+    <Platforms>ARM64;x64</Platforms>
+    <!-- Default unqualified builds to the machine's native architecture for MSIX packaging.
+         PROCESSOR_ARCHITECTURE reports AMD64 on Intel/AMD, so normalise that to
+         the MSBuild platform name x64. -->
+    <AionNativeArch>$([MSBuild]::ValueOrDefault('$(PROCESSOR_ARCHITEW6432)', '$(PROCESSOR_ARCHITECTURE)'))</AionNativeArch>
+    <Platform Condition="'$(Platform)' == '' Or '$(Platform)' == 'AnyCPU'">$(AionNativeArch.Replace('AMD64', 'x64'))</Platform>
+    <RuntimeIdentifiers>win-arm64;win-x64</RuntimeIdentifiers>
     <RuntimeIdentifier Condition="'$(Platform)' == 'ARM64'">win-arm64</RuntimeIdentifier>
+    <RuntimeIdentifier Condition="'$(Platform)' == 'x64'">win-x64</RuntimeIdentifier>
 
     <!-- WinUI 3 packaged app with MSIX identity. -->
     <UseWinUI>true</UseWinUI>
@@ -97,14 +101,18 @@
   </ItemGroup>
 
   <!--
-    Sync Package.appxmanifest's <Identity ProcessorArchitecture> to the
-    current build's $(Platform). The source manifest holds "arm64" already;
-    this keeps it correct if $(Platform) is overridden. Runs before AppX
-    packaging picks up the manifest.
+    Sync Package.appxmanifest's <Identity ProcessorArchitecture> to the current
+    build's $(Platform). The source manifest holds "arm64"; an x64 build rewrites
+    it to "x64" before AppX packaging reads the manifest.
+
+    Note this edits the tracked source file in place, so an x64 build leaves
+    Package.appxmanifest modified in the working tree. That is pre-existing
+    behaviour of this target, now reachable from both platforms.
   -->
-  <Target Name="AionInstructChatSyncManifestArch" BeforeTargets="_GenerateCurrentProjectAppxManifest;_GenerateAppxManifest;GenerateAppxManifest" Condition="'$(Platform)' == 'ARM64'">
+  <Target Name="AionInstructChatSyncManifestArch" BeforeTargets="_GenerateCurrentProjectAppxManifest;_GenerateAppxManifest;GenerateAppxManifest" Condition="'$(Platform)' == 'ARM64' Or '$(Platform)' == 'x64'">
     <PropertyGroup>
-      <_AionInstructChatManifestArch>arm64</_AionInstructChatManifestArch>
+      <_AionInstructChatManifestArch Condition="'$(Platform)' == 'ARM64'">arm64</_AionInstructChatManifestArch>
+      <_AionInstructChatManifestArch Condition="'$(Platform)' == 'x64'">x64</_AionInstructChatManifestArch>
     </PropertyGroup>
     <XmlPoke
       XmlInputPath="Package.appxmanifest"

@@ -1,8 +1,8 @@
 # Copilot instructions — Aion Instruct Preview Chat sample
 
 You are working in the **consumer sample** for the **Aion Instruct Preview SDK**: an on-device
-language model that runs locally on the Copilot+ PC NPU — QNN on Snapdragon (ARM64). x64 (Intel/AMD,
-OpenVINO) support is coming soon. A certified NPU EP is required (no CPU fallback, no cloud calls).
+language model that runs locally on the Copilot+ PC NPU — QNN on Snapdragon (ARM64) and OpenVINO on
+Intel (x64). A certified NPU EP is required (no CPU fallback, no cloud calls).
 This repo shows a
 third-party developer how to (1) consume the SDK's framework package, (2) wire it into their own
 app, and (3) build + run a working chat app. Use this file to orient fast; the
@@ -55,10 +55,9 @@ tools, the Windows metadata ref pack, MSIX loose-layout tooling) is restored fro
 ./Bootstrap.ps1
 ```
 
-**Manual build + run** (packaged WinUI app). This preview targets **ARM64 Snapdragon Copilot+ PCs
-(NPU via QNN)** — build with `-p:Platform=ARM64`. x64 (Intel/AMD) support is coming soon. The csproj
-defaults `$(Platform)` to the box's *native* arch, so a bare `dotnet build` on an ARM64 box already
-does the right thing.
+**Manual build + run** (packaged WinUI app). Builds for **ARM64** (Snapdragon, QNN) and **x64**
+(Intel, OpenVINO) — `-p:Platform=ARM64` or `-p:Platform=x64`. The csproj defaults `$(Platform)` to
+the box's *native* arch, normalising `AMD64` to `x64`, so a bare `dotnet build` does the right thing.
 
 ```powershell
 dotnet run --project AionInstructPreview.Chat.csproj --launch-profile "AionInstructPreview.Chat" -c Release -p:Platform=ARM64   # Snapdragon (QNN NPU)
@@ -135,9 +134,9 @@ API reference: README → [API surface used](../README.md#api-surface-used).
 
 ## Hard rules / gotchas (do not violate)
 
-- **This preview targets ARM64 Snapdragon (QNN NPU) only.** Build with `-p:Platform=ARM64`. x64
-  (Intel/AMD, OpenVINO) support is coming soon. The csproj defaults `$(Platform)` to the box's native
-  arch — don't break that logic.
+- **ARM64 (Snapdragon, QNN) is the hardware-validated path; x64 (Intel, OpenVINO) builds but has
+  not yet been run on an Intel NPU.** AMD/VitisAI is unsupported. The csproj defaults `$(Platform)`
+  to the box's native arch and normalises `AMD64` to `x64` — don't break that logic.
 - **Never build under `C:\Windows\System32`** (the default dir of an elevated prompt). UAC file
   virtualization corrupts CsWinRT / XAML codegen (`cswinrt.exe exited with code 1`). Build
   non-elevated from your user profile.

@@ -4,7 +4,7 @@ A WinUI 3 desktop chat app that runs against the **AionInstructPreview** on-devi
 
 > **Preview notes**
 >
-> - **Platform support.** This preview runs on **ARM64 Copilot+ PCs (Snapdragon, QNN NPU)**. **x64 (Intel/AMD) support is coming soon.**
+> - **Platform support.** This preview ships **ARM64** (Snapdragon, QNN NPU) and **x64** (Intel, OpenVINO NPU) builds. The ARM64/QNN path is validated on hardware; the **x64/OpenVINO path has not yet been validated on an Intel NPU** — please file an issue with your results if you try it. AMD (VitisAI) is not yet supported.
 > - **Performance.** The first-token latency and tokens/sec shown in the app are **preliminary — not final performance.** Runtime and model optimizations are underway, and these numbers will improve over time.
 
 ## Quickstart
@@ -38,7 +38,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
   The SDK picks the EP automatically via WinML's `ExecutionProviderCatalog` — whichever NPU EP the OS reports as `Certified + Ready` wins. A certified NPU EP is required — there is no CPU fallback.
 
-  > **x64 (Intel/AMD) support is coming soon.** This preview targets ARM64/Snapdragon only.
+  > **x64 is built but not yet hardware-validated.** ARM64/Snapdragon (QNN) is the validated path. x64 produces an Intel/OpenVINO build that has not been run on an Intel NPU yet; AMD (VitisAI) is not supported.
 
 **Build-time vs run-time — these are different things.** A common source of confusion (see [Troubleshooting](#troubleshooting)) is assuming a build error means a *runtime* component is missing. It usually doesn't. Keep the two lists straight:
 

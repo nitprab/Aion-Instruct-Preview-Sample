@@ -2,11 +2,12 @@
 #
 # Picks up where 'git clone' leaves off:
 #   1. Verifies prereqs (PS arch, Developer Mode) and auto-installs the
-#      WAR 2 + WAR 1.8 runtimes via winget when they're missing.
+#      WAR 2 runtime via winget when it's missing.
 #   2. Downloads the latest signed Aion Instruct Preview release from GitHub if the
 #      framework MSIX is not already installed; installs it.
 #   3. Drops the SDK NuGet into ./nuget-local/.
-#   4. Acquires and registers the QNN execution provider on ARM64.
+#   4. Acquires and registers the QNN execution provider on ARM64 (x64 uses
+#      OpenVINO, delivered through Windows Update).
 #   5. Builds and launches AionInstructPreview.Chat via 'dotnet run' (which
 #      registers the loose build-output layout as a development package).
 #
@@ -40,8 +41,6 @@ $FrameworkPkgId  = 'Microsoft.AionInstructPreview.Framework.1.0'
 $ConsumerPkgId   = 'AionInstructPreviewChat'
 $ConsumerVersion = '1.0.0.0'
 $WarPkgId        = 'Microsoft.WindowsAppRuntime.2'
-$War18PkgId      = 'Microsoft.WindowsAppRuntime.1.8'
-$War18MinVersion = '8000.836.2153.0'
 
 function Write-Step  { param([string]$Msg) Write-Host "[bootstrap] $Msg" -ForegroundColor Cyan }
 function Write-OK    { param([string]$Msg) Write-Host "[bootstrap] $Msg" -ForegroundColor Green }
@@ -134,23 +133,15 @@ if ($nativeArch) {
 
 $arch = switch ($rawArch) {
     'ARM64' { 'ARM64' }
+    'AMD64' { 'x64' }
     default { $null }
-}
-if ($rawArch -eq 'AMD64') {
-    Stop-WithRecovery `
-        -Title 'x64 (Intel/AMD) support is coming soon.' `
-        -Recovery @(
-            'This preview of Aion Instruct Preview supports ARM64 Copilot+ PCs (Snapdragon, QNN NPU) only.',
-            'x64 (Intel/AMD) support is coming soon — check the releases page for updates.',
-            'Run Bootstrap.ps1 on an ARM64 Snapdragon Copilot+ PC to try the preview today.'
-        )
 }
 if (-not $arch) {
     Stop-WithRecovery `
         -Title "Unsupported processor architecture=$rawArch (process arch $emulatedArch, native arch '$nativeArch')" `
         -Recovery @(
-            'AionInstructPreview.Chat ships an ARM64 build only in this preview.',
-            'Launch a 64-bit PowerShell on an ARM64 Snapdragon Copilot+ PC and re-run.'
+            'AionInstructPreview.Chat ships ARM64 and x64 builds.',
+            'Launch a 64-bit PowerShell on an ARM64 (Snapdragon) or x64 (Intel/AMD) Copilot+ PC and re-run.'
         )
 }
 Write-Step "Architecture: $arch"
@@ -158,11 +149,7 @@ Write-Step "Architecture: $arch"
 # --- 2. WAR 2 runtime check -------------------------------------------------
 Ensure-Runtime -Label 'WAR 2' -PkgId $WarPkgId -WingetId 'Microsoft.WindowsAppRuntime.2.0' -Arch $arch
 
-# --- 2a. WAR 1.8 runtime check ----------------------------------------------
-# The on-device model runs on the WinML stack from Windows App Runtime 1.8.
-Ensure-Runtime -Label 'WAR 1.8' -PkgId $War18PkgId -WingetId 'Microsoft.WindowsAppRuntime.1.8' -Arch $arch -MinVersion $War18MinVersion
-
-# --- 2b. Developer Mode check -----------------------------------------------
+# --- 2a. Developer Mode check -----------------------------------------------
 # dotnet run registers the loose build-output layout as a development package,
 # which requires Developer Mode.
 $devModeKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock'
@@ -356,11 +343,14 @@ if (Test-Path $expectedNupkg) {
     Write-OK "Dropped $expectedNupkgName in nuget-local/"
 }
 
-# --- 5a. Acquire QNN execution provider (if needed) ------------------------
-# Keep this explicitly ARM64-gated so future x64 support does not attempt to
-# acquire Qualcomm's QNN provider.
+# --- 5a. Acquire the NPU execution provider (if needed) --------------------
+# ARM64 (Snapdragon) needs the Qualcomm QNN provider staged. x64 (Intel) uses
+# OpenVINO, which ships through Windows Update rather than this catalog-driven
+# acquisition, so there is nothing to fetch here; the SDK picks it up from the
+# Windows ML catalog at load time and Diagnose-AionInstructPreview.ps1 reports
+# whether it was found.
 if ($arch -eq 'ARM64') {
-    $qnnPackages = @(Get-AppxPackage -Name 'MicrosoftCorporationII.WinML.Qualcomm.QNN.EP.1.8*' -ErrorAction SilentlyContinue |
+    $qnnPackages = @(Get-AppxPackage -Name 'MicrosoftCorporationII.WinML.Qualcomm.QNN.EP.2*' -ErrorAction SilentlyContinue |
         Where-Object { $_.Architecture -eq $arch })
     if ($qnnPackages.Count -eq 0) {
         $acquireQnnProject = Join-Path $PSScriptRoot 'tools\AcquireQnnEp\AcquireQnnEp.csproj'
@@ -373,8 +363,6 @@ if ($arch -eq 'ARM64') {
                 -Recovery @(
                     'Re-run the acquisition tool directly for full output:',
                     "    dotnet run --project `"$acquireQnnProject`" -c Release -p:Platform=$arch",
-                    "Verify Windows App Runtime 1.8 v$War18MinVersion or newer is installed:",
-                    "    Get-AppxPackage -Name $War18PkgId",
                     'Check internet access and install the latest Snapdragon NPU/QNN drivers.'
                 )
         }

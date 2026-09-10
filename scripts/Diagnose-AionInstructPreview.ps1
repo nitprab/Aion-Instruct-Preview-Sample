@@ -40,6 +40,7 @@ if ($nativeArch) {
 
 $arch = switch ($rawArch) {
     'ARM64' { 'ARM64' }
+    'AMD64' { 'x64' }
     default { $null }
 }
 
@@ -94,8 +95,12 @@ if ($ci) {
         Write-Check PASS 'Snapdragon ARM64 (Copilot+ PC class) -- QNN NPU path expected' $detail
     } elseif ($arch -eq 'ARM64') {
         Write-Check WARN 'ARM64 but processor name doesn''t match a known Snapdragon SKU' $detail
-    } elseif ($rawArch -eq 'AMD64') {
-        Write-Check WARN 'x64 host -- x64 (Intel/AMD) support is coming soon; this preview supports ARM64/Snapdragon (QNN NPU) only' $detail
+    } elseif ($arch -eq 'x64' -and $procName -match 'Intel|Core\s*Ultra|Lunar|Arrow|Meteor') {
+        Write-Check PASS 'Intel x64 (Copilot+ PC class) -- OpenVINO NPU path expected' $detail
+    } elseif ($arch -eq 'x64') {
+        Write-Check WARN ('x64 host, but the processor name does not match a known Intel Copilot+ SKU. ' +
+            'AMD (VitisAI) is not yet validated for this preview; the SDK will fall back to CPU if no ' +
+            'certified NPU provider is found.') $detail
     } else {
         Write-Check WARN ('Unexpected architecture: ' + $rawArch) $detail
     }
@@ -165,6 +170,13 @@ if ($arch -eq 'ARM64') {
     # CreateAsync with an opaque cache error.
     Check-Package -Name 'MicrosoftCorporationII.WinML.Qualcomm.QNN.EP.2*' `
                   -Friendly 'Qualcomm QNN execution provider 2' -MinVersion '2.2480.49.0'
+} elseif ($arch -eq 'x64') {
+    # Intel's OpenVINO provider arrives through Windows Update rather than the
+    # acquisition tool, and its package name is not pinned here because the x64 path
+    # has not yet been validated on Intel NPU hardware. The wider EP sweep below lists
+    # whatever is actually present, and section 4b reports which EP the SDK chose.
+    Write-Check INFO ('x64 host: expecting an Intel OpenVINO execution provider. ' +
+        'See the EP package sweep below and the EP decision in section 4b.')
 }
 Check-Package -Name 'AionInstructPreviewChat' -Friendly 'AionInstructPreview.Chat consumer app'
 
