@@ -158,9 +158,13 @@ function Check-Package {
 
 Check-Package -Name 'Microsoft.AionInstructPreview.Framework.1.0' -Friendly 'Aion Instruct Preview framework MSIX'
 Check-Package -Name 'Microsoft.WindowsAppRuntime.2' -Friendly 'Windows App Runtime 2' -MinVersion '2.0.1.0'
-Check-Package -Name 'Microsoft.WindowsAppRuntime.1.8' -Friendly 'Windows App Runtime 1.8' -MinVersion '8000.836.2153.0'
 if ($arch -eq 'ARM64') {
-    Check-Package -Name 'MicrosoftCorporationII.WinML.Qualcomm.QNN.EP.1.8*' -Friendly 'Qualcomm QNN execution provider 1.8'
+    # QNN EP 2, not 1.8. The muffin shared-context groups only compile on the newer
+    # provider: EP 2.2451.48 fails all six cacheable models while 2.2480.49 passes all
+    # six, so a machine carrying only the 1.8 provider will fail during the first
+    # CreateAsync with an opaque cache error.
+    Check-Package -Name 'MicrosoftCorporationII.WinML.Qualcomm.QNN.EP.2*' `
+                  -Friendly 'Qualcomm QNN execution provider 2' -MinVersion '2.2480.49.0'
 }
 Check-Package -Name 'AionInstructPreviewChat' -Friendly 'AionInstructPreview.Chat consumer app'
 
@@ -540,7 +544,9 @@ if ($skipLiveCapture) {
                 }
                 '^no-catalog$' {
                     Write-Check FAIL ('SDK could not enumerate the WinML catalog -- falling back to ' + $device + '. ' +
-                        'Indicates WindowsAppRuntime 2 / Microsoft.Windows.AI.MachineLearning.dll is not loading correctly.')
+                        "The framework ships its own Microsoft.Windows.AI.MachineLearning.dll and onnxruntime.dll, " +
+                        'so this points at a damaged framework package rather than a missing Windows App Runtime. ' +
+                        'Reinstall the Aion Instruct Preview framework MSIX.')
                 }
                 default {
                     Write-Check WARN ("Captured EP decision but reason='$reason' is unrecognized (newer SDK?). EP=$ep Device=$device")
