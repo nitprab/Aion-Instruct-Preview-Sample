@@ -6,8 +6,8 @@
 #   2. Downloads the latest signed Aion Instruct Preview release from GitHub if the
 #      framework MSIX is not already installed; installs it.
 #   3. Drops the SDK NuGet into ./nuget-local/.
-#   4. Acquires and registers the QNN execution provider on ARM64 (x64 uses
-#      OpenVINO, delivered through Windows Update).
+#   4. Acquires and registers the QNN execution provider on ARM64. x64 (Intel,
+#      OpenVINO) is not covered -- see step 5a.
 #   5. Builds and launches AionInstructPreview.Chat via 'dotnet run' (which
 #      registers the loose build-output layout as a development package).
 #
@@ -344,11 +344,18 @@ if (Test-Path $expectedNupkg) {
 }
 
 # --- 5a. Acquire the NPU execution provider (if needed) --------------------
-# ARM64 (Snapdragon) needs the Qualcomm QNN provider staged. x64 (Intel) uses
-# OpenVINO, which ships through Windows Update rather than this catalog-driven
-# acquisition, so there is nothing to fetch here; the SDK picks it up from the
-# Windows ML catalog at load time and Diagnose-AionInstructPreview.ps1 reports
-# whether it was found.
+# ARM64 (Snapdragon) needs the Qualcomm QNN provider staged, which the acquisition tool
+# below does through the Windows ML catalog.
+#
+# x64 (Intel) needs MicrosoftCorporationII.WinML.Intel.OpenVINO.EP.1.8 (>= 1.8.15.0, the
+# MinimumPackageVersion in WinML's own EP catalog). This script does NOT acquire it, and it
+# is NOT reliably present: an Intel Lunar Lake box used for validation had only the
+# WindowsWorkload.EP.Intel.OpenVINO.Framework.1.8 companion package, which does not satisfy
+# the catalog. The SDK then failed every call with WinMLEpEnsureReady returning 0x80073D3B
+# and reason=no-npu-ep-available.
+#
+# Diagnose-AionInstructPreview.ps1 checks for it explicitly, so an x64 developer who lands
+# in that state gets told which package to install rather than an opaque runtime failure.
 if ($arch -eq 'ARM64') {
     $qnnPackages = @(Get-AppxPackage -Name 'MicrosoftCorporationII.WinML.Qualcomm.QNN.EP.2*' -ErrorAction SilentlyContinue |
         Where-Object { $_.Architecture -eq $arch })
