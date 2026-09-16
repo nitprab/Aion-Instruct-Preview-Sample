@@ -2,6 +2,8 @@
 
 A WinUI 3 desktop chat app that runs against the **AionInstructPreview** on-device language model on Copilot+ PCs. Tokens stream into the bubble as they're generated; first-token latency and tokens/sec are shown under each reply.
 
+Two tabs, two APIs: **Chat** drives `AionInstructPreview.Text` (multi-turn conversation, optional system prompt), and **Describe image** drives `AionInstructPreview.Imaging`. Both mirror their Windows App SDK in-box counterparts member-for-member.
+
 > **Preview notes**
 >
 > - **Platform support.** This preview ships **ARM64** (Snapdragon, QNN NPU) and **x64** (Intel, OpenVINO NPU) builds. The ARM64/QNN path is validated on hardware; the **x64/OpenVINO path has not yet been validated on an Intel NPU** — please file an issue with your results if you try it. AMD (VitisAI) is not yet supported.
@@ -181,9 +183,15 @@ See [`nuget.config`](nuget.config) in this repo for the working version. Once th
 An external project needs **both** of these `PackageReference`s in its csproj:
 
 ```xml
-<PackageReference Include="AionInstructPreview.Text.Framework" Version="1.0.*" />
+<PackageReference Include="AionInstructPreview.Text.Framework" Version="1.0.3" />
 <PackageReference Include="Microsoft.Windows.CsWinRT" Version="2.1.5" />
 ```
+
+Pin the SDK version exactly rather than floating with `1.0.*`. The local feed is a folder you
+populate by hand, so a wildcard silently resolves to whichever `.nupkg` happens to be sitting
+there — an older one is missing `AionInstructPreview.Imaging.winmd` and fails with `CS0246
+'ImageDescriptionGenerator' not found` rather than a version error. Image description requires
+**1.0.3 or later**.
 
 The CsWinRT reference is **not** optional and **not** implicit. CsWinRT's build targets — the ones that run the source generator turning `AionInstructPreview.Text.winmd` into C# — only import when `Microsoft.Windows.CsWinRT` is referenced **directly** by the project. Picking it up transitively (e.g. via the Windows App SDK) does **not** import those build targets, so the generator never runs and you get a wall of `CS0246 'Aion Instruct Preview' / 'LanguageModel' not found`. This sample's csproj already has both references, which is why copying our csproj "just works" — but a project you wire up from scratch must add the CsWinRT reference itself.
 
@@ -304,6 +312,7 @@ Cross-link the WinAppSDK reference for full member docs:
 |---|---|
 | [`static CreateAsync()`](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.windows.ai.text.languagemodel.createasync?view=windows-app-sdk-2.0) | `AionInstructClient.CreateAsync` calls this once at startup; long-running on first launch (NPU compile). |
 | [`CreateContext()`](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.windows.ai.text.languagemodel.createcontext?view=windows-app-sdk-2.0) | Opens a fresh conversation context. Called once on startup and again on "New conversation". |
+| `CreateContext(String)` | Opens a context with a **system prompt** that steers every turn in that conversation. The sample's "System prompt" expander maps to this overload. A context is immutable once created, so a changed prompt only takes effect on the next `CreateContext` — which is why the UI applies it via "New conversation". |
 | [`GenerateResponseAsync(LanguageModelContext, String)`](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.windows.ai.text.languagemodel.generateresponseasync?view=windows-app-sdk-2.0) | Streaming generation rooted in the session context — every chat send hits this overload. Progress fires per-token deltas; awaiting the operation returns the final `LanguageModelResponseResult`. |
 | [`GenerateResponseAsync(String)`](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.windows.ai.text.languagemodel.generateresponseasync?view=windows-app-sdk-2.0) | Context-less single-shot variant; supported by Aion Instruct Preview, not used by this sample. |
 | [`Close()`](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.windows.ai.text.languagemodel.close?view=windows-app-sdk-2.0) / `Dispose()` | Releases the model on window close. `IClosable.Close()` projects to `IDisposable.Dispose()` in C#. |
@@ -332,7 +341,61 @@ Other values (`InProgress`, `BlockedByPolicy`, `PromptBlockedByContentModeration
 
 ### Streaming semantics
 
-Progress callbacks deliver **per-token deltas**, not the accumulated text. `ChatViewModel.SendAsync` appends each delta to the current Aion Instruct Preview message via `DispatcherQueue.TryEnqueue`, which is what gives the typewriter-style streaming feel.
+Progress callbacks deliver **per-token deltas**, not the accumulated text. `ChatViewModel.SendAsync` appends each delta to the current Aion Instruct Preview message via `DispatcherQueue.TryEnqueue`, which is what gives the typewriter-style streaming feel. Image description uses the same delta contract.
+
+---
+
+## Image description
+
+The **Describe image** tab uses `AionInstructPreview.Imaging`, which mirrors
+[`Microsoft.Windows.AI.Imaging`](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.windows.ai.imaging?view=windows-app-sdk-2.0).
+As with the text API, porting to the inbox stack is a `using` change.
+
+```csharp
+using AionInstructPreview.Imaging;
+using Microsoft.Graphics.Imaging;
+using Microsoft.Windows.AI.ContentSafety;
+
+using var generator = await ImageDescriptionGenerator.CreateAsync();
+
+var op = generator.DescribeAsync(
+    imageBuffer,                               // Microsoft.Graphics.Imaging.ImageBuffer
+    ImageDescriptionKind.DetailedDescription,
+    new ContentFilterOptions());
+op.Progress = (_, delta) => Console.Write(delta);   // per-token delta, same as the text API
+
+var result = await op;
+Console.WriteLine(result.Description);
+```
+
+| Member | Notes |
+|---|---|
+| `static ImageDescriptionGenerator.CreateAsync()` | Loads SigLIP2 and the vision projector. Neither is NPU-cached, so **expect ~20 s on every construction**, warm or cold. Create it once and keep it. |
+| `DescribeAsync(ImageBuffer, ImageDescriptionKind, ContentFilterOptions)` | Streams per-token deltas via `Progress`; the full text is `ImageDescriptionResult.Description`. |
+| `ImageDescriptionKind` | `BriefDescription`, `DetailedDescription`, `DiagramDescription`, `AccessibleDescription`. |
+| `ImageDescriptionResult.Status` | `Complete` on success. The sample surfaces anything else verbatim. |
+
+**Pixel formats.** `ImageBuffer` must be `Rgb8`, `Argb8`, `Bgra8`, or `Gray8`. `Bgr8` and `Rgba8`
+are rejected — they have no byte-order-equivalent in the underlying stack, and silently mapping
+them onto a near-miss would feed the encoder swapped channels. Convert before you call.
+[`AionImageDescriptionClient.cs`](AionImageDescriptionClient.cs) shows the `BitmapDecoder` →
+`Bgra8` → `ImageBuffer.CreateForBuffer` path.
+
+### Preview limitations
+
+> - **No content moderation.** `DescribeAsync` takes a `ContentFilterOptions` so the signature
+>   matches the inbox API, but it is **ignored**. Nothing is filtered, and the moderation members
+>   of `ImageDescriptionResultStatus` are never returned. Do not use this build to validate
+>   content-filtering behaviour.
+> - **OCR differs from the inbox stack.** Text in the image is extracted with the inbox
+>   `Windows.Media.Ocr` engine rather than the OneOCR model the shipping stack uses, because
+>   OneOCR's model key can't be redistributed in a sideloadable package. Expect lower text
+>   fidelity on text-dense images. OCR is best-effort: a failure yields an empty string and
+>   description continues.
+> - **Description accuracy is under investigation.** Descriptions are fluent but can be
+>   incorrectly grounded relative to the shipping in-box implementation. This is being tracked
+>   as a vision-model/projector version-pairing issue. Treat image description in this preview as
+>   an **API-compatibility** surface, not a quality baseline.
 
 ---
 
@@ -394,7 +457,7 @@ The most common failure mode is the SDK failing to initialize because no certifi
 ```
 Aion-Instruct-Preview-Sample/
 ├── App.xaml / App.xaml.cs           # WinAppSDK app entry
-├── MainWindow.xaml / .cs            # Chat UI: Mica, custom title bar, transcript, input
+├── MainWindow.xaml / .cs            # Chat + Describe image tabs, Mica, custom title bar
 ├── Controls/
 │   └── TypingIndicator.xaml(.cs)    # Three-dot pulsing "Aion Instruct Preview is thinking" indicator
 ├── Models/
@@ -402,8 +465,9 @@ Aion-Instruct-Preview-Sample/
 │   ├── ModelState.cs                # enum: Loading | Ready | Generating | Error
 │   └── GenerationMetrics.cs         # Per-response timing: TTFT, tok/s, token count
 ├── ViewModels/
-│   └── ChatViewModel.cs             # Conversation, state machine, Send command
+│   └── ChatViewModel.cs             # Conversation, state machine, Send + Describe commands
 ├── AionInstructClient.cs                  # Async wrapper over AionInstructPreview.Text.LanguageModel
+├── AionImageDescriptionClient.cs          # Async wrapper over AionInstructPreview.Imaging.ImageDescriptionGenerator
 ├── Package.appxmanifest             # MSIX identity. PackageDependency injected at build.
 ├── AionInstructPreview.Chat.csproj               # .NET 9 WinUI 3 packaged csproj
 ├── nuget.config                     # Feeds: nuget.org + ./nuget-local/

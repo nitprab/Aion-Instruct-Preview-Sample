@@ -8,6 +8,8 @@ using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using AionInstructPreview.Chat.Models;
 using global::AionInstructPreview.Text;
+using global::AionInstructPreview.Imaging;
+using Windows.Storage;
 
 namespace AionInstructPreview.Chat.ViewModels;
 
@@ -22,12 +24,19 @@ public sealed class ChatViewModel : INotifyPropertyChanged, IDisposable
 {
     private readonly DispatcherQueue _dispatcher;
     private AionInstructClient? _aionClient;
+    private AionImageDescriptionClient? _descriptionClient;
 
     private ModelState _state = ModelState.Loading;
     private string _promptText = string.Empty;
     private string? _errorMessage;
     private bool _isContextFull;
     private bool _disposed;
+    private string _systemPrompt = string.Empty;
+
+    // The system prompt baked into the live LanguageModelContext. A context is immutable
+    // once created, so a changed prompt only takes effect on the next CreateContext.
+    private string _appliedSystemPrompt = string.Empty;
+    private ImageDescriptionKind _selectedImageKind = ImageDescriptionKind.DetailedDescription;
 
     public ChatViewModel()
     {
@@ -36,6 +45,7 @@ public sealed class ChatViewModel : INotifyPropertyChanged, IDisposable
                 "ChatViewModel must be constructed on a UI thread that has a DispatcherQueue.");
 
         Messages = new ObservableCollection<Message>();
+        ImageMessages = new ObservableCollection<Message>();
         SendCommand = new RelayCommand(_ => _ = SendAsync(), _ => CanSend);
         NewConversationCommand = new RelayCommand(
             _ => StartNewConversation(),
@@ -46,8 +56,59 @@ public sealed class ChatViewModel : INotifyPropertyChanged, IDisposable
 
     public ObservableCollection<Message> Messages { get; }
 
+    // Image description keeps its own transcript. The two features are independent:
+    // describing an image neither reads nor extends the chat conversation context.
+    public ObservableCollection<Message> ImageMessages { get; }
+
+    // Applied when a new conversation is started, via CreateContext(String systemPrompt).
+    // Empty means "use the stack's default assistant prompt".
+    public string SystemPrompt
+    {
+        get => _systemPrompt;
+        set
+        {
+            if (_systemPrompt == value) return;
+            _systemPrompt = value;
+            Raise();
+            Raise(nameof(SystemPromptPendingVisibility));
+        }
+    }
+
+    // Shown when the typed system prompt differs from the one the live context was
+    // built with AND there is history worth preserving. With an empty transcript the
+    // prompt is applied silently on the next send, so no nag is needed.
+    public Visibility SystemPromptPendingVisibility =>
+        (_systemPrompt != _appliedSystemPrompt && Messages.Count > 0)
+            ? Visibility.Visible : Visibility.Collapsed;
+
     public ICommand SendCommand { get; }
     public ICommand NewConversationCommand { get; }
+
+    // The four description styles the SDK supports, in enum order. Bound to the
+    // ComboBox next to the attach-image button.
+    public ImageDescriptionKind[] ImageKinds { get; } =
+    {
+        ImageDescriptionKind.BriefDescription,
+        ImageDescriptionKind.DetailedDescription,
+        ImageDescriptionKind.DiagramDescription,
+        ImageDescriptionKind.AccessibleDescription,
+    };
+
+    public ImageDescriptionKind SelectedImageKind
+    {
+        get => _selectedImageKind;
+        set
+        {
+            if (_selectedImageKind == value) return;
+            _selectedImageKind = value;
+            Raise();
+        }
+    }
+
+    // The vision models load lazily on first use, so the attach button stays
+    // enabled whenever the model is idle. Describing sets State to Generating,
+    // which also disables the chat input -- both features share one model.
+    public bool DescribeEnabled => _state == ModelState.Ready;
 
     public string PromptText
     {
@@ -78,6 +139,7 @@ public sealed class ChatViewModel : INotifyPropertyChanged, IDisposable
             Raise(nameof(SendEnabled));
             Raise(nameof(CanStartNewConversation));
             Raise(nameof(NewConversationButtonEnabled));
+            Raise(nameof(DescribeEnabled));
             (SendCommand as RelayCommand)?.RaiseCanExecuteChanged();
             (NewConversationCommand as RelayCommand)?.RaiseCanExecuteChanged();
         }
@@ -168,6 +230,17 @@ public sealed class ChatViewModel : INotifyPropertyChanged, IDisposable
         // Snapshot + clear before the await so the input box empties immediately.
         PromptText = string.Empty;
 
+        // A context is immutable, so a changed system prompt needs a new one. With an
+        // empty transcript there is no history to lose, so apply it silently rather than
+        // making the user discover the "New conversation" step. With history, the banner
+        // (SystemPromptPendingVisibility) tells them to start a new conversation instead.
+        if (_systemPrompt != _appliedSystemPrompt && Messages.Count == 0)
+        {
+            _aionClient.StartNewConversation(_systemPrompt);
+            _appliedSystemPrompt = _systemPrompt;
+            Raise(nameof(SystemPromptPendingVisibility));
+        }
+
         Messages.Add(new Message(MessageRole.User, prompt, MessageStatus.Complete));
         var aionMessage = new Message(MessageRole.Aion, string.Empty, MessageStatus.Streaming);
         Messages.Add(aionMessage);
@@ -227,6 +300,104 @@ public sealed class ChatViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
+    // Describes a user-picked image and appends both the thumbnail entry and the
+    // generated description to the transcript.
+    //
+    // The image description pipeline is independent of the chat context: it does not
+    // read or extend the conversation history, and it mirrors the inbox
+    // ImageDescriptionGenerator API exactly.
+    public async Task DescribeImageAsync(StorageFile file)
+    {
+        if (file is null) return;
+        if (!DescribeEnabled) return;
+
+        // Set before the first await so a second click can't slip through.
+        State = ModelState.Generating;
+
+        var kind = _selectedImageKind;
+
+        var userMessage = new Message(
+            MessageRole.User,
+            $"Describe this image ({KindLabel(kind)})",
+            MessageStatus.Complete);
+
+        try
+        {
+            var bitmap = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
+            using (var thumbStream = await file.OpenReadAsync())
+            {
+                await bitmap.SetSourceAsync(thumbStream);
+            }
+            userMessage.Image = bitmap;
+        }
+        catch (Exception)
+        {
+            // A thumbnail is a nicety; a decode failure here must not block description.
+        }
+
+        ImageMessages.Add(userMessage);
+
+        var aionMessage = new Message(MessageRole.Aion, string.Empty, MessageStatus.Streaming);
+        ImageMessages.Add(aionMessage);
+
+        try
+        {
+            if (_descriptionClient is null)
+            {
+                aionMessage.StatusDetail =
+                    "Loading the vision models (SigLIP2 + projector). This takes ~20 seconds the first time.";
+                _descriptionClient = await AionImageDescriptionClient.CreateAsync().ConfigureAwait(true);
+                aionMessage.StatusDetail = null;
+            }
+
+            var generation = await _descriptionClient.DescribeAsync(
+                file,
+                kind,
+                onToken: delta =>
+                {
+                    // Progress reports per-token deltas, exactly like the chat path
+                    // (DescriptionSink::OnProcessingUpdate forwards only the new text).
+                    // Append, don't assign.
+                    _dispatcher.TryEnqueue(() => aionMessage.Text += delta);
+                }).ConfigureAwait(true);
+
+            var result = generation.Response;
+            aionMessage.Metrics = generation.Metrics;
+
+            if (result.Status == ImageDescriptionResultStatus.Complete)
+            {
+                if (aionMessage.Text != result.Description)
+                {
+                    aionMessage.Text = result.Description;
+                }
+                aionMessage.Status = MessageStatus.Complete;
+            }
+            else
+            {
+                aionMessage.StatusDetail = $"Image description returned Status={result.Status}.";
+                aionMessage.Status = MessageStatus.Error;
+            }
+        }
+        catch (Exception ex)
+        {
+            aionMessage.StatusDetail = ex.Message;
+            aionMessage.Status = MessageStatus.Error;
+        }
+        finally
+        {
+            State = ModelState.Ready;
+        }
+    }
+
+    private static string KindLabel(ImageDescriptionKind kind) => kind switch
+    {
+        ImageDescriptionKind.BriefDescription => "brief",
+        ImageDescriptionKind.DetailedDescription => "detailed",
+        ImageDescriptionKind.DiagramDescription => "diagram",
+        ImageDescriptionKind.AccessibleDescription => "accessible",
+        _ => kind.ToString(),
+    };
+
     // Discard the in-process LanguageModelContext (and its accumulated
     // conversation history) and open a fresh one. Clears the transcript
     // too so the UX matches the model state.
@@ -235,9 +406,11 @@ public sealed class ChatViewModel : INotifyPropertyChanged, IDisposable
         if (!CanStartNewConversation) return;
         if (_aionClient == null) return;
 
-        _aionClient.StartNewConversation();
+        _aionClient.StartNewConversation(_systemPrompt);
+        _appliedSystemPrompt = _systemPrompt;
         Messages.Clear();
         IsContextFull = false;
+        Raise(nameof(SystemPromptPendingVisibility));
     }
 
     public void Dispose()
@@ -246,6 +419,8 @@ public sealed class ChatViewModel : INotifyPropertyChanged, IDisposable
         _disposed = true;
         _aionClient?.Dispose();
         _aionClient = null;
+        _descriptionClient?.Dispose();
+        _descriptionClient = null;
     }
 
     private void Raise([CallerMemberName] string? name = null) =>

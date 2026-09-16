@@ -48,11 +48,17 @@ public sealed class AionInstructClient : IDisposable
     // Discard the current conversation context and open a fresh one. Use
     // this after a PromptLargerThanContext result, or whenever the user
     // hits "New conversation" in the UI. Cheap — synchronous + ~ms.
-    public void StartNewConversation()
+    //
+    // When systemPrompt is null or empty the model runs under the stack's stock
+    // assistant prompt; otherwise it uses the CreateContext(String) overload, which
+    // mirrors Microsoft.Windows.AI.Text.LanguageModel exactly.
+    public void StartNewConversation(string? systemPrompt = null)
     {
         ThrowIfDisposed();
         var old = _context;
-        _context = _model.CreateContext();
+        _context = string.IsNullOrWhiteSpace(systemPrompt)
+            ? _model.CreateContext()
+            : _model.CreateContext(systemPrompt);
         ((IDisposable)old).Dispose();
     }
 

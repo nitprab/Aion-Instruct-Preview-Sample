@@ -91,9 +91,12 @@ README → [Use Aion Instruct Preview in your own app](../README.md#use-aion-ins
    transitively does NOT import its source-generator targets, and you'll get a wall of
    `CS0246 LanguageModel not found`):
    ```xml
-   <PackageReference Include="AionInstructPreview.Text.Framework" Version="1.0.*" />
+   <PackageReference Include="AionInstructPreview.Text.Framework" Version="1.0.3" />
    <PackageReference Include="Microsoft.Windows.CsWinRT" Version="2.1.5" />
    ```
+   Pin the SDK version exactly — the local feed is hand-populated, so `1.0.*` silently resolves to
+   whatever `.nupkg` is present. Image description needs **1.0.3+** for
+   `AionInstructPreview.Imaging.winmd`.
    A **packaged** app additionally needs `Microsoft.WindowsAppSDK`, `Microsoft.Windows.SDK.BuildTools`,
    and (for `dotnet run` without VS) `Microsoft.Windows.SDK.BuildTools.WinApp` — see the root
    [`AionInstructPreview.Chat.csproj`](../AionInstructPreview.Chat.csproj) for the exact set and the
