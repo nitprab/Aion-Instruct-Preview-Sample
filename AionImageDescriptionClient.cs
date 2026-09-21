@@ -25,10 +25,8 @@ public sealed record AionDescriptionResult(
 // Microsoft.Windows.AI.Imaging.ImageDescriptionGenerator, so app code written against
 // this preview moves to the inbox stack by changing the `using` only.
 //
-// IMPORTANT: this preview performs NO content moderation. DescribeAsync accepts a
-// ContentFilterOptions to match the inbox signature, but it is ignored: nothing is
-// filtered and the moderation members of ImageDescriptionResultStatus are never
-// returned. Do not use this build to validate content-filtering configuration.
+// Default ContentFilterOptions enable image and text moderation. Streamed updates
+// have passed their current checks, but a later check may still block the final result.
 public sealed class AionImageDescriptionClient : IDisposable
 {
     private readonly ImageDescriptionGenerator _generator;
@@ -48,45 +46,45 @@ public sealed class AionImageDescriptionClient : IDisposable
         return new AionImageDescriptionClient(generator);
     }
 
-    // Describes a single image file. Description deltas are streamed to onToken, which
+    // Describes a single image file. Description deltas are streamed to onUpdate, which
     // fires on a background thread -- the caller marshals to the UI thread.
     public async Task<AionDescriptionResult> DescribeAsync(
         StorageFile file,
         ImageDescriptionKind kind,
-        Action<string> onToken)
+        Action<string> onUpdate)
     {
         ArgumentNullException.ThrowIfNull(file);
-        ArgumentNullException.ThrowIfNull(onToken);
+        ArgumentNullException.ThrowIfNull(onUpdate);
         ThrowIfDisposed();
 
         ImageBuffer imageBuffer = await LoadImageBufferAsync(file).ConfigureAwait(false);
 
         var stopwatch = Stopwatch.StartNew();
-        long ttftTicks = 0;
-        int tokenCount = 0;
+        long firstUpdateTicks = 0;
+        int updateCount = 0;
 
         var op = _generator.DescribeAsync(imageBuffer, kind, new ContentFilterOptions());
         op.Progress = (_, delta) =>
         {
-            if (tokenCount == 0)
+            if (updateCount == 0)
             {
-                ttftTicks = stopwatch.ElapsedTicks;
+                firstUpdateTicks = stopwatch.ElapsedTicks;
             }
-            tokenCount++;
-            onToken(delta);
+            updateCount++;
+            onUpdate(delta);
         };
 
         var response = await op;
         stopwatch.Stop();
 
         double totalMs = stopwatch.Elapsed.TotalMilliseconds;
-        double ttftMs = ttftTicks == 0 ? totalMs : ttftTicks * 1000.0 / Stopwatch.Frequency;
-        double decodeMs = totalMs - ttftMs;
-        double? tps = (tokenCount > 1 && decodeMs > 0)
-            ? (tokenCount - 1) * 1000.0 / decodeMs
+        double? firstUpdateMs = updateCount == 0 ? null : firstUpdateTicks * 1000.0 / Stopwatch.Frequency;
+        double? afterFirstUpdateMs = totalMs - firstUpdateMs;
+        double? updatesPerSecond = (updateCount > 1 && afterFirstUpdateMs > 0)
+            ? (updateCount - 1) * 1000.0 / afterFirstUpdateMs
             : (double?)null;
 
-        var metrics = new GenerationMetrics(ttftMs, decodeMs, totalMs, tokenCount, tps);
+        var metrics = new GenerationMetrics(firstUpdateMs, afterFirstUpdateMs, totalMs, updateCount, updatesPerSecond);
         return new AionDescriptionResult(response, metrics);
     }
 

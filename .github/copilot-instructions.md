@@ -91,12 +91,12 @@ README → [Use Aion Instruct Preview in your own app](../README.md#use-aion-ins
    transitively does NOT import its source-generator targets, and you'll get a wall of
    `CS0246 LanguageModel not found`):
    ```xml
-   <PackageReference Include="AionInstructPreview.Text.Framework" Version="1.0.3" />
+   <PackageReference Include="AionInstructPreview.Text.Framework" Version="1.0.1" />
    <PackageReference Include="Microsoft.Windows.CsWinRT" Version="2.1.5" />
    ```
    Pin the SDK version exactly — the local feed is hand-populated, so `1.0.*` silently resolves to
-   whatever `.nupkg` is present. Image description needs **1.0.3+** for
-   `AionInstructPreview.Imaging.winmd`.
+   whatever `.nupkg` is present. This sample requires **1.0.1** for the updated text
+   contract and includes `AionInstructPreview.Imaging.winmd`.
    A **packaged** app additionally needs `Microsoft.WindowsAppSDK`, `Microsoft.Windows.SDK.BuildTools`,
    and (for `dotnet run` without VS) `Microsoft.Windows.SDK.BuildTools.WinApp` — see the root
    [`AionInstructPreview.Chat.csproj`](../AionInstructPreview.Chat.csproj) for the exact set and the
@@ -121,16 +121,48 @@ using AionInstructPreview.Text;
 LanguageModel model = await LanguageModel.CreateAsync();   // first launch: ~3-5 min NPU compile; warm ~30s
 LanguageModelContext ctx = model.CreateContext();          // carries multi-turn history
 
-var op = model.GenerateResponseAsync(ctx, prompt);
-op.Progress = (_, token) => { /* streamed token delta — marshal to UI thread yourself */ };
+// Preserve the sample's previous sampling settings.
+var options = new LanguageModelOptions { Temperature = 0.5f, TopP = 0.9f, TopK = 40 };
+var op = model.GenerateResponseAsync(ctx, prompt, options);
+op.Progress = (_, delta) => { /* streamed text chunk — marshal to UI thread yourself */ };
 LanguageModelResponseResult result = await op;
 ```
 
+- **SDK 1.0.1 contract:** multi-turn generation requires the third
+  `AionInstructPreview.Text.LanguageModelOptions` argument; `null` is rejected.
+  Single-shot generation supports `(prompt)` and `(prompt, options)`. Options expose only
+  `Temperature`, `TopP`, `TopK`, and `ContentFilterOptions` (no LoRA).
+  New options default to `0.9f`, `0.9f`, and `40`; the sample explicitly uses temperature `0.5f`
+  to preserve its previous behavior. The prompt-only overload also retains `0.5f`.
+  `ContentFilterOptions` is constructed by default and enables moderation in the moderation
+  follow-up. That follow-up requires matching rebuilt SDK metadata and runtime; do not infer
+  moderation support from the previously published package versions or invent a release version.
+  Rebuild consumers with NuGet **1.0.1** and framework **1.0.0.1**; this breaking preview contract
+  change does not promise compatibility with previously built consumer binaries.
+- **No preview-only diagnostics:** results expose `Text` and `Status`, not `TokenCount`,
+  `TimeToFirstToken`, or `DecodeDuration`. The model no longer exposes `GetTokenCount`,
+  `MaxPromptTokenCount`, or `ContextLength`. Keep measurements in the app using `Stopwatch`
+  and progress callbacks. Report callback counts/rates as **updates**, not tokenizer tokens;
+  both chat and image description use `GenerationMetrics`.
 - **First `CreateAsync()` per process is slow** (~4-5 min cold while QNN compiles the QDQ ONNX to the
   NPU; ~30s warm from cache). Keep loading UI up; never assume it's hung.
 - **Multi-turn is automatic** via the `LanguageModelContext` — reuse it; call `CreateContext()` again
   to start a fresh conversation.
 - `Progress` callbacks fire on a WinRT-chosen thread — the caller marshals back to the UI thread.
+- **Moderation:** TCM, ICM, and inbox blocklists filter by default. Preserve accepted partial text
+  during progress, but clear the current response on any terminal block/error and guard queued UI
+  callbacks so they cannot append after completion. Only display final result text on `Complete`.
+  The console cannot retract printed text: explicitly report that a failed stream has no final
+  response. Accepted updates do not guarantee later checks or unchanged conversation state.
+  Missing/null filter options and nested severities default to `Low`; they do not disable filtering.
+  Missing/failed moderation or blocklist payloads fail the operation. Do not promise `High` severity
+  support, an off switch, or RAI qualification.
+- Distinguish text prompt/response blocks and image/image-text/description blocks from operational
+  failures. Never display or log raw exception messages that could contain rejected content.
+  Catch `CreateContext(systemPrompt)` rejection (`0x8A1F0202`) on first send and explicit reset.
+  Retain the existing context after a blocked turn; do not automatically start a new conversation.
+  User-typed input and thumbnails may remain visible but do not imply moderation approval.
+  See README → [Content moderation](../README.md#content-moderation); do not claim RAI qualification.
 - Dispose `LanguageModelContext` then `LanguageModel` (`IClosable` projects to `IDisposable`).
 
 API reference: README → [API surface used](../README.md#api-surface-used).

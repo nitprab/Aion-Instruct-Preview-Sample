@@ -242,6 +242,14 @@ if (-not $release -or -not $release.tag_name) {
 }
 $tag = $release.tag_name
 $targetFwVersion = $tag -replace '^v', ''
+if ([version]$targetFwVersion -lt [version]'1.0.0.1') {
+    Stop-WithRecovery `
+        -Title "Release $tag predates this sample's API contract (framework 1.0.0.1 / SDK 1.0.1)" `
+        -Recovery @(
+            'Use a release containing framework 1.0.0.1 or newer and SDK NuGet 1.0.1.',
+            'For local development, build/install the matching SDK and launch the sample manually.'
+        )
+}
 $assets = @($release.assets)
 Write-OK "Latest release: $tag ($($release.name))"
 
@@ -263,10 +271,11 @@ function Get-AssetUrl {
 
 # Asset names follow a fixed pattern: AionInstructPreview.LanguageModel.Framework_<ver>_<arch>.msix
 # and AionInstructPreview.Text.Framework.<nupkgVer>.nupkg.
-# The MSIX uses the 4-part package version (e.g. 1.0.0.0); the NuGet asset uses the
-# 3-part SemVer (e.g. 1.0.0). Derive the 3-part version for the nupkg name.
+# The contract NuGet is pinned independently of the framework release version.
 $expectedMsixName = "AionInstructPreview.LanguageModel.Framework_${targetFwVersion}_${arch}.msix"
-$nupkgVersion = ($targetFwVersion -split '\.')[0..2] -join '.'
+[xml]$sampleProject = Get-Content (Join-Path $PSScriptRoot 'AionInstructPreview.Chat.csproj') -Raw
+$nupkgVersion = ($sampleProject.Project.ItemGroup.PackageReference |
+    Where-Object { $_.Include -eq 'AionInstructPreview.Text.Framework' }).Version
 $expectedNupkgName = "AionInstructPreview.Text.Framework.${nupkgVersion}.nupkg"
 
 # --- 4. Framework MSIX state -----------------------------------------------
