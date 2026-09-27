@@ -309,7 +309,7 @@
                                 FontSize="12"
                                 Opacity="0.7"
                                 TextWrapping="Wrap"
-                                Text="Pick an image and Aion Instruct Preview will describe it. The first description loads the vision models and takes about 20 seconds. Image description is independent of the chat conversation." />
+                                Text="Pick an image and Aion Instruct Preview will describe it. The first description loads the vision models and may compile caches for several minutes. Image description is independent of the chat conversation." />
 
                             <Grid Padding="20,8,20,16">
                                 <Grid.ColumnDefinitions>

@@ -1,4 +1,6 @@
 using System;
+using System.IO;
+using System.Text;
 using System.Threading.Tasks;
 using AionInstructPreview.Text;
 using AionInstructPreview.Chat.ConsoleApp;
@@ -14,7 +16,17 @@ string prompt = args.Length > 0
 
 // Take the runtime dependency on the installed framework package (no MSIX
 // identity for an unpackaged app), same as the WPF sample.
-FrameworkDependency.EnsureLoaded();
+try
+{
+    FrameworkDependency.EnsureLoaded();
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine($"[Aion Instruct Preview-console] Framework initialization failed: {ex.Message}");
+    return 1;
+}
+
+Console.OutputEncoding = new UTF8Encoding(false);
 
 // Write model-load status to stderr so stdout remains dedicated to the streamed reply.
 Console.Error.WriteLine("[Aion Instruct Preview-console] Loading model (first run may take several minutes)...");
@@ -28,6 +40,12 @@ catch (Exception ex)
 {
     Console.Error.WriteLine($"[Aion Instruct Preview-console] Model loading failed (0x{ex.HResult:X8}).");
     return 1;
+}
+finally
+{
+    // Native initialization can replace the standard handles; refresh the cached writers.
+    Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true });
+    Console.SetError(new StreamWriter(Console.OpenStandardError(), new UTF8Encoding(false)) { AutoFlush = true });
 }
 
 Console.WriteLine("[Aion Instruct Preview-console] Model ready.");

@@ -55,7 +55,7 @@
 
     <!-- Use the NuGet-delivered Windows metadata pack for CsWinRT projection generation. -->
     <WindowsSdkPackageVersion>10.0.26100.57</WindowsSdkPackageVersion>
-    <CsWinRTWindowsMetadata>$(NuGetPackageRoot)microsoft.windows.sdk.net.ref\$(WindowsSdkPackageVersion)\winmd</CsWinRTWindowsMetadata>
+    <CsWinRTWindowsMetadata>$([System.IO.Path]::Combine('$(NuGetPackageRoot)', 'microsoft.windows.sdk.net.ref', '$(WindowsSdkPackageVersion)', 'winmd'))</CsWinRTWindowsMetadata>
 
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>

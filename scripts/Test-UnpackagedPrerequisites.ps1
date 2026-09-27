@@ -9,7 +9,8 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 
 function Test-Launcher {
-    param([string]$Path, [bool]$HasWar2, [string]$FrameworkVersion, [bool]$ExpectBuild)
+    param([string]$Path, [bool]$HasWar2, [string]$FrameworkVersion, [bool]$ExpectBuild,
+        [string]$NuGetConfig)
 
     $queries = [Collections.Generic.List[string]]::new()
     function Get-AppxPackage {
@@ -27,10 +28,21 @@ function Test-Launcher {
         }
     }
     function Get-ChildItem { param($Path, $Filter) return 'SDK-package-present' }
-    function dotnet { throw 'BUILD_REACHED' }
+    function dotnet {
+        if ($NuGetConfig) {
+            $expected = '-p:RestoreConfigFile=' + (Get-Item -LiteralPath $NuGetConfig).FullName
+            if ($expected -notin $args) { throw 'CONFIG_OVERRIDE_NOT_FORWARDED' }
+        } elseif (@($args | Where-Object { $_ -like '-p:RestoreConfigFile=*' }).Count) {
+            throw 'UNEXPECTED_CONFIG_OVERRIDE'
+        }
+        throw 'BUILD_REACHED'
+    }
 
     $message = ''
-    try { & $Path }
+    try {
+        if ($NuGetConfig) { & $Path -NuGetConfig $NuGetConfig }
+        else { & $Path }
+    }
     catch { $message = $_.Exception.Message }
     if (($message -eq 'BUILD_REACHED') -ne $ExpectBuild) {
         throw "Unexpected prerequisite result for $Path : $message"
@@ -45,8 +57,17 @@ function Test-Launcher {
 
 foreach ($relative in @('unpackaged-console\Run.ps1', 'unpackaged-wpf\Run.ps1')) {
     $path = Join-Path $root $relative
-    Test-Launcher -Path $path -HasWar2 $true -FrameworkVersion '1.0.0.1' -ExpectBuild $true
-    Test-Launcher -Path $path -HasWar2 $false -FrameworkVersion '1.0.0.1' -ExpectBuild $false
+    Test-Launcher -Path $path -HasWar2 $true -FrameworkVersion '1.0.0.2' -ExpectBuild $true
+    Test-Launcher -Path $path -HasWar2 $false -FrameworkVersion '1.0.0.2' -ExpectBuild $false
+    Test-Launcher -Path $path -HasWar2 $true -FrameworkVersion '1.0.0.1' -ExpectBuild $false
     Test-Launcher -Path $path -HasWar2 $true -FrameworkVersion '1.0.0.0' -ExpectBuild $false
+    Test-Launcher -Path $path -HasWar2 $true -FrameworkVersion '1.0.0.2' -ExpectBuild $true `
+        -NuGetConfig (Join-Path $root 'nuget.config')
 }
-Write-Output 'PASS: 6 launcher prerequisite scenarios; no packages or apps changed.'
+foreach ($relative in @('Bootstrap.ps1', 'unpackaged-console\Run.ps1', 'unpackaged-wpf\Run.ps1')) {
+    $rejected = $false
+    try { & (Join-Path $root $relative) -NuGetConfig (Join-Path $root ([guid]::NewGuid().ToString() + '.config')) }
+    catch { $rejected = $_.CategoryInfo.Category -eq 'ObjectNotFound' }
+    if (-not $rejected) { throw "$relative did not reject the missing config before setup." }
+}
+Write-Output 'PASS: 10 launcher scenarios and 3 missing-config checks; no packages or apps changed.'

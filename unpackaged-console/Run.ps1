@@ -14,19 +14,26 @@
 param(
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]] $Prompt,
-    [string] $CaptureLog
+    [string] $CaptureLog,
+    [string] $NuGetConfig
 )
 
 $ErrorActionPreference = "Stop"
 $here = $PSScriptRoot
+$restoreArgs = @()
+if ($PSBoundParameters.ContainsKey('NuGetConfig')) {
+    $configPath = (Get-Item -LiteralPath $NuGetConfig -ErrorAction Stop).FullName
+    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { throw 'NuGetConfig must be a file.' }
+    $restoreArgs = @("-p:RestoreConfigFile=$configPath")
+}
 
 Write-Host "Checking for the installed Aion Instruct Preview framework package..."
 $pkg = Get-AppxPackage "Microsoft.AionInstructPreview.Framework*" |
     Sort-Object Version -Descending |
     Select-Object -First 1
 
-if ($null -eq $pkg -or [version]$pkg.Version -lt [version]'1.0.0.1') {
-    Write-Error "Install or upgrade Aion Instruct Preview framework to 1.0.0.1 or newer (see the repo root README), then re-run."
+if ($null -eq $pkg -or [version]$pkg.Version -lt [version]'1.0.0.2') {
+    Write-Error "Install or upgrade Aion Instruct Preview framework to 1.0.0.2 or newer (see the repo root README), then re-run."
     exit 1
 }
 
@@ -48,7 +55,10 @@ if (-not $sdkNupkg) {
 $csproj = Join-Path $here "AionInstructPreview.Chat.Console.csproj"
 
 # Build first so build output never pollutes the captured run.
-dotnet build $csproj -c Release | Out-Host
+dotnet build $csproj -c Release @restoreArgs | Out-Host
+if ($LASTEXITCODE -ne 0) {
+    throw "Console sample build failed (exit $LASTEXITCODE); no executable was launched."
+}
 
 # Run the built executable directly so captured output contains only the sample app.
 $exe = Get-ChildItem -Path (Join-Path $here "bin\Release") -Filter "AionInstructPreview.Chat.Console.exe" -Recurse |

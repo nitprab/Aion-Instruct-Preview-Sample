@@ -109,12 +109,43 @@ Developer Mode must also be on (same as the terminal path). Then open `AionInstr
 
 ## Quickstart details
 
+### Using an organization-managed NuGet feed
+
+The default configuration uses nuget.org plus `nuget-local` for the SDK contract. If your network
+requires an approved package mirror, supply an alternate NuGet configuration explicitly:
+
+```powershell
+.\Bootstrap.ps1 -NuGetConfig C:\local-config\sample.nuget.config
+.\unpackaged-console\Run.ps1 -NuGetConfig C:\local-config\sample.nuget.config
+.\unpackaged-wpf\Run.ps1 -NuGetConfig C:\local-config\sample.nuget.config
+```
+
+Use a configuration supplied by your organization. It must include the approved feed and the
+sample's `nuget-local` directory (use its absolute path when the configuration lives elsewhere).
+Include `<clear />` under `<packageSources>` to replace inherited sources rather than still
+querying nuget.org. Authenticate using the feed's supported credential provider; do not put
+tokens in source control. Feed access and availability of the required package versions are
+prerequisites. No automatic feed fallback or TLS verification bypass is performed.
+
+The override applies to NuGet restore for the sample and the QNN acquisition helper. It does not
+redirect GitHub release downloads, Windows runtime installation, or EP acquisition. The checked-in
+public feed configuration remains unchanged.
+
+For build-only validation, pass the same configuration directly:
+
+```powershell
+dotnet build .\AionInstructPreview.Chat.csproj -c Release -p:Platform=ARM64 `
+    "-p:RestoreConfigFile=C:\local-config\sample.nuget.config"
+```
+
 A few notes on the steps in the [Quickstart](#quickstart) above:
 
 - **Where to clone.** Put the repo under your user profile (e.g. `C:\repos` or `%USERPROFILE%`) — **not** under `C:\Windows\System32`. See the [Troubleshooting](#troubleshooting) note on System32 for why an elevated prompt's default directory breaks the build.
 - **`Set-ExecutionPolicy`.** Required on a machine with the default `Restricted` policy — otherwise `.\Bootstrap.ps1` fails with *"Bootstrap.ps1 cannot be loaded because running scripts is disabled on this system"*, even after a clean `git clone`. It's scoped to the current process, needs no admin, and reverts when you close the window.
 - **What `Bootstrap.ps1` does.** Detects your arch, enables Developer Mode if needed, pulls the latest signed Aion Instruct Preview release from this repo's public GitHub releases over HTTPS, installs the framework MSIX, drops the SDK NuGet, installs the QNN execution provider on ARM64 when its AppX package is missing, then builds and launches AionInstructPreview.Chat via `dotnet run`. Re-runs are idempotent.
-- **First launch.** Sits on **"Loading Aion Instruct Preview model…"** for ~3-5 minutes while the runtime compiles its QDQ ONNX models for the picked execution provider (QNN on Snapdragon NPU). This is a one-shot per device — every prompt after that is sub-second to first token on NPU.
+- **First launch.** Model loading can take several minutes while the runtime compiles NPU caches.
+  Valid caches are reused. Response latency depends on prompt length, hardware, and moderation;
+  the first progress callback is approved output, not a measurement of the model's first token.
 
 ---
 
@@ -210,7 +241,7 @@ With the feed and both [required PackageReferences](#required-packagereferences)
 | Surface | What it does |
 |---|---|
 | `AionInstructPreview.Text.Framework.props` (auto-imported) | Adds `AionInstructPreview.Text.winmd` to `$(CsWinRTInputs)`. CsWinRT projects the runtimeclasses into C# at build time. |
-| `AionInstructPreview.Text.Framework.targets` (auto-imported) | Before pack, injects the framework dependency with `MinVersion="1.0.0.1"` or raises an older minimum. Publisher defaults to the Microsoft Corporation subject used by the signed framework. Override `<AionInstructPreviewFrameworkPublisher>` only for a differently signed framework. |
+| `AionInstructPreview.Text.Framework.targets` (auto-imported) | Before pack, injects the framework dependency with `MinVersion="1.0.0.2"` or raises an older minimum. Publisher defaults to the Microsoft Corporation subject used by the signed framework. Override `<AionInstructPreviewFrameworkPublisher>` only for a differently signed framework. |
 
 At runtime, Windows AppX resolves the framework dependency, loads `AionInstructPreview.Text.dll` out of the framework's deploy folder, and cross-package WinRT activation hands you the runtimeclasses.
 
@@ -270,7 +301,7 @@ int arch = RuntimeInformation.ProcessArchitecture == Architecture.Arm64
 TryCreatePackageDependency(
     /* user            */ IntPtr.Zero,
     /* packageFamily   */ "Microsoft.AionInstructPreview.Framework.1.0_8wekyb3d8bbwe",
-    /* minVersion      */ (1UL << 48) | 1UL, // 1.0.0.1
+    /* minVersion      */ (1UL << 48) | 2UL, // 1.0.0.2
     /* architectures   */ arch,
     /* lifetimeKind    */ 0,       // Process
     /* lifetimeArtifact*/ null,
@@ -350,7 +381,7 @@ Preview-only diagnostics have been removed: results no longer expose `TokenCount
 `TimeToFirstToken`, or `DecodeDuration`, and the model no longer exposes `GetTokenCount`,
 `MaxPromptTokenCount`, or `ContextLength`. Measure app-observed timing locally instead; callback
 counts are progress updates, not exact token counts. Rebuild consumers with NuGet **1.0.1** and run
-against framework **1.0.0.1**. This is a breaking preview contract change; compatibility with
+against framework **1.0.0.2**. This is a breaking preview contract change; compatibility with
 previously built consumer binaries is not promised.
 
 Cross-link the WinAppSDK reference for full member docs:
@@ -483,7 +514,7 @@ else
 
 | Member | Notes |
 |---|---|
-| `static ImageDescriptionGenerator.CreateAsync()` | Loads SigLIP2 and the vision projector. Neither is NPU-cached, so **expect ~20 s on every construction**, warm or cold. Create it once and keep it. |
+| `static ImageDescriptionGenerator.CreateAsync()` | Loads SigLIP2 using a validated persistent NPU cache and loads the projector on CPU. First-run cache compilation can take several minutes. Create it once and keep it. |
 | `DescribeAsync(ImageBuffer, ImageDescriptionKind, ContentFilterOptions)` | Streams text chunks via `Progress`; the full text is `ImageDescriptionResult.Description`. |
 | `ImageDescriptionKind` | `BriefDescription`, `DetailedDescription`, `DiagramDescription`, `AccessibleDescription`. |
 | `ImageDescriptionResult.Status` | `Complete` on success. WinUI distinguishes `ImageBlockedByContentModeration`, `TextInImageBlockedByContentModeration`, and `DescriptionTextBlockedByContentModeration` from operational failures. |

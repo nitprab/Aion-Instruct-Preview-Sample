@@ -28,10 +28,19 @@
 
 [CmdletBinding()]
 param(
-    [switch]$SkipLaunch
+    [switch]$SkipLaunch,
+    [string]$NuGetConfig
 )
 
 $ErrorActionPreference = 'Stop'
+$restoreArgs = @()
+$restoreDisplay = ''
+if ($PSBoundParameters.ContainsKey('NuGetConfig')) {
+    $configPath = (Get-Item -LiteralPath $NuGetConfig -ErrorAction Stop).FullName
+    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { throw 'NuGetConfig must be a file.' }
+    $restoreArgs = @("-p:RestoreConfigFile=$configPath")
+    $restoreDisplay = " `"-p:RestoreConfigFile=$configPath`""
+}
 [Net.ServicePointManager]::SecurityProtocol = `
     [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
@@ -242,11 +251,11 @@ if (-not $release -or -not $release.tag_name) {
 }
 $tag = $release.tag_name
 $targetFwVersion = $tag -replace '^v', ''
-if ([version]$targetFwVersion -lt [version]'1.0.0.1') {
+if ([version]$targetFwVersion -lt [version]'1.0.0.2') {
     Stop-WithRecovery `
-        -Title "Release $tag predates this sample's API contract (framework 1.0.0.1 / SDK 1.0.1)" `
+        -Title "Release $tag predates this sample's API contract (framework 1.0.0.2 / SDK 1.0.1)" `
         -Recovery @(
-            'Use a release containing framework 1.0.0.1 or newer and SDK NuGet 1.0.1.',
+            'Use a release containing framework 1.0.0.2 or newer and SDK NuGet 1.0.1.',
             'For local development, build/install the matching SDK and launch the sample manually.'
         )
 }
@@ -371,14 +380,14 @@ if ($arch -eq 'ARM64') {
     if ($qnnPackages.Count -eq 0) {
         $acquireQnnProject = Join-Path $PSScriptRoot 'tools\AcquireQnnEp\AcquireQnnEp.csproj'
         Write-Step 'Preparing the QNN execution provider (this may download components) ...'
-        & dotnet run --project "$acquireQnnProject" -c Release -p:Platform=$arch | Out-Host
+        & dotnet run --project "$acquireQnnProject" -c Release -p:Platform=$arch @restoreArgs | Out-Host
         $acquireQnnExitCode = $LASTEXITCODE
         if ($acquireQnnExitCode -ne 0) {
             Stop-WithRecovery `
                 -Title "QNN execution provider acquisition failed (exit code $acquireQnnExitCode)" `
                 -Recovery @(
                     'Re-run the acquisition tool directly for full output:',
-                    "    dotnet run --project `"$acquireQnnProject`" -c Release -p:Platform=$arch",
+                    "    dotnet run --project `"$acquireQnnProject`" -c Release -p:Platform=$arch$restoreDisplay",
                     'Check internet access and install the latest Snapdragon NPU/QNN drivers.'
                 )
         }
@@ -396,7 +405,7 @@ if ($SkipLaunch) {
     Write-Host ''
     Write-OK 'Bootstrap complete (skipped chat app build/launch).'
     Write-Host 'Build and run manually:' -ForegroundColor Cyan
-    Write-Host "    dotnet run --project `"$csproj`" --launch-profile `"AionInstructPreview.Chat`" -c Release -p:Platform=$arch" -ForegroundColor Cyan
+    Write-Host "    dotnet run --project `"$csproj`" --launch-profile `"AionInstructPreview.Chat`" -c Release -p:Platform=$arch$restoreDisplay" -ForegroundColor Cyan
     return
 }
 
@@ -408,13 +417,13 @@ if ($existing) {
 }
 
 Write-Step "Building and launching AionInstructPreview.Chat ($arch, Release) via dotnet run ..."
-& dotnet run --project "$csproj" --launch-profile "AionInstructPreview.Chat" -c Release -p:Platform=$arch | Out-Host
+& dotnet run --project "$csproj" --launch-profile "AionInstructPreview.Chat" -c Release -p:Platform=$arch @restoreArgs | Out-Host
 if ($LASTEXITCODE -ne 0) {
     Stop-WithRecovery `
         -Title 'dotnet run failed' `
         -Recovery @(
             'Re-run directly for full output:',
-            "    dotnet run --project `"$csproj`" --launch-profile `"AionInstructPreview.Chat`" -c Release -p:Platform=$arch",
+            "    dotnet run --project `"$csproj`" --launch-profile `"AionInstructPreview.Chat`" -c Release -p:Platform=$arch$restoreDisplay",
             'Most likely causes:',
             '  - Developer Mode is off (Settings -> Privacy & security -> For developers).',
             '  - The .NET 9 SDK is not installed (run: dotnet --info to confirm).',

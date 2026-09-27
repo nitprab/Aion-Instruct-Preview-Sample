@@ -361,7 +361,7 @@ public sealed class ChatViewModel : INotifyPropertyChanged, IDisposable
             if (_descriptionClient is null)
             {
                 aionMessage.StatusDetail =
-                    "Loading the vision models (SigLIP2 + projector). This takes ~20 seconds the first time.";
+                    "Loading the vision models (SigLIP2 + projector). First-run cache compilation may take several minutes.";
                 _descriptionClient = await AionImageDescriptionClient.CreateAsync().ConfigureAwait(true);
                 aionMessage.StatusDetail = null;
             }

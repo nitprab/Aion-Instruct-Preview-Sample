@@ -37,9 +37,8 @@ public sealed class AionImageDescriptionClient : IDisposable
         _generator = generator;
     }
 
-    // Loads SigLIP2 + the Muffin vision projector. Neither vision model is NPU-cached,
-    // so they are recompiled on every construction -- expect ~20s even on a warm machine.
-    // Keep a loading affordance up until this completes.
+    // SigLIP2 reuses a validated NPU cache; the projector loads its source model on CPU.
+    // Keep a loading affordance visible, especially during first-run cache compilation.
     public static async Task<AionImageDescriptionClient> CreateAsync()
     {
         var generator = await ImageDescriptionGenerator.CreateAsync();

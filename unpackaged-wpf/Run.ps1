@@ -12,16 +12,24 @@
 # the SDK NuGet at build time, and the model files + native DLLs are consumed
 # in place from the installed framework package at runtime.
 
+param([string]$NuGetConfig)
+
 $ErrorActionPreference = "Stop"
 $here = $PSScriptRoot
+$restoreArgs = @()
+if ($PSBoundParameters.ContainsKey('NuGetConfig')) {
+    $configPath = (Get-Item -LiteralPath $NuGetConfig -ErrorAction Stop).FullName
+    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { throw 'NuGetConfig must be a file.' }
+    $restoreArgs = @("-p:RestoreConfigFile=$configPath")
+}
 
 Write-Host "Checking for the installed Aion Instruct Preview framework package..."
 $pkg = Get-AppxPackage "Microsoft.AionInstructPreview.Framework*" |
     Sort-Object Version -Descending |
     Select-Object -First 1
 
-if ($null -eq $pkg -or [version]$pkg.Version -lt [version]'1.0.0.1') {
-    Write-Error "Install or upgrade Aion Instruct Preview framework to 1.0.0.1 or newer (see the repo root README), then re-run."
+if ($null -eq $pkg -or [version]$pkg.Version -lt [version]'1.0.0.2') {
+    Write-Error "Install or upgrade Aion Instruct Preview framework to 1.0.0.2 or newer (see the repo root README), then re-run."
     exit 1
 }
 
@@ -39,4 +47,4 @@ if (-not $sdkNupkg) {
     exit 1
 }
 
-dotnet run --project (Join-Path $here "AionInstructPreview.Chat.Wpf.csproj") -c Release
+dotnet run --project (Join-Path $here "AionInstructPreview.Chat.Wpf.csproj") -c Release @restoreArgs
