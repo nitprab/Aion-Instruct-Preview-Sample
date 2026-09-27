@@ -2,11 +2,12 @@
 #
 # Picks up where 'git clone' leaves off:
 #   1. Verifies prereqs (PS arch, Developer Mode) and auto-installs the
-#      WAR 2 + WAR 1.8 runtimes via winget when they're missing.
+#      WAR 2 runtime via winget when it's missing.
 #   2. Downloads the latest signed Aion Instruct Preview release from GitHub if the
 #      framework MSIX is not already installed; installs it.
 #   3. Drops the SDK NuGet into ./nuget-local/.
-#   4. Acquires and registers the QNN execution provider on ARM64.
+#   4. Acquires and registers the QNN execution provider on ARM64. x64 (Intel,
+#      OpenVINO) is not covered -- see step 5a.
 #   5. Builds and launches AionInstructPreview.Chat via 'dotnet run' (which
 #      registers the loose build-output layout as a development package).
 #
@@ -27,10 +28,19 @@
 
 [CmdletBinding()]
 param(
-    [switch]$SkipLaunch
+    [switch]$SkipLaunch,
+    [string]$NuGetConfig
 )
 
 $ErrorActionPreference = 'Stop'
+$restoreArgs = @()
+$restoreDisplay = ''
+if ($PSBoundParameters.ContainsKey('NuGetConfig')) {
+    $configPath = (Get-Item -LiteralPath $NuGetConfig -ErrorAction Stop).FullName
+    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { throw 'NuGetConfig must be a file.' }
+    $restoreArgs = @("-p:RestoreConfigFile=$configPath")
+    $restoreDisplay = " `"-p:RestoreConfigFile=$configPath`""
+}
 [Net.ServicePointManager]::SecurityProtocol = `
     [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
@@ -40,8 +50,6 @@ $FrameworkPkgId  = 'Microsoft.AionInstructPreview.Framework.1.0'
 $ConsumerPkgId   = 'AionInstructPreviewChat'
 $ConsumerVersion = '1.0.0.0'
 $WarPkgId        = 'Microsoft.WindowsAppRuntime.2'
-$War18PkgId      = 'Microsoft.WindowsAppRuntime.1.8'
-$War18MinVersion = '8000.836.2153.0'
 
 function Write-Step  { param([string]$Msg) Write-Host "[bootstrap] $Msg" -ForegroundColor Cyan }
 function Write-OK    { param([string]$Msg) Write-Host "[bootstrap] $Msg" -ForegroundColor Green }
@@ -134,23 +142,15 @@ if ($nativeArch) {
 
 $arch = switch ($rawArch) {
     'ARM64' { 'ARM64' }
+    'AMD64' { 'x64' }
     default { $null }
-}
-if ($rawArch -eq 'AMD64') {
-    Stop-WithRecovery `
-        -Title 'x64 (Intel/AMD) support is coming soon.' `
-        -Recovery @(
-            'This preview of Aion Instruct Preview supports ARM64 Copilot+ PCs (Snapdragon, QNN NPU) only.',
-            'x64 (Intel/AMD) support is coming soon — check the releases page for updates.',
-            'Run Bootstrap.ps1 on an ARM64 Snapdragon Copilot+ PC to try the preview today.'
-        )
 }
 if (-not $arch) {
     Stop-WithRecovery `
         -Title "Unsupported processor architecture=$rawArch (process arch $emulatedArch, native arch '$nativeArch')" `
         -Recovery @(
-            'AionInstructPreview.Chat ships an ARM64 build only in this preview.',
-            'Launch a 64-bit PowerShell on an ARM64 Snapdragon Copilot+ PC and re-run.'
+            'AionInstructPreview.Chat ships ARM64 and x64 builds.',
+            'Launch a 64-bit PowerShell on an ARM64 (Snapdragon) or x64 (Intel/AMD) Copilot+ PC and re-run.'
         )
 }
 Write-Step "Architecture: $arch"
@@ -158,11 +158,7 @@ Write-Step "Architecture: $arch"
 # --- 2. WAR 2 runtime check -------------------------------------------------
 Ensure-Runtime -Label 'WAR 2' -PkgId $WarPkgId -WingetId 'Microsoft.WindowsAppRuntime.2.0' -Arch $arch
 
-# --- 2a. WAR 1.8 runtime check ----------------------------------------------
-# The on-device model runs on the WinML stack from Windows App Runtime 1.8.
-Ensure-Runtime -Label 'WAR 1.8' -PkgId $War18PkgId -WingetId 'Microsoft.WindowsAppRuntime.1.8' -Arch $arch -MinVersion $War18MinVersion
-
-# --- 2b. Developer Mode check -----------------------------------------------
+# --- 2a. Developer Mode check -----------------------------------------------
 # dotnet run registers the loose build-output layout as a development package,
 # which requires Developer Mode.
 $devModeKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock'
@@ -255,6 +251,14 @@ if (-not $release -or -not $release.tag_name) {
 }
 $tag = $release.tag_name
 $targetFwVersion = $tag -replace '^v', ''
+if ([version]$targetFwVersion -lt [version]'1.0.0.2') {
+    Stop-WithRecovery `
+        -Title "Release $tag predates this sample's API contract (framework 1.0.0.2 / SDK 1.0.1)" `
+        -Recovery @(
+            'Use a release containing framework 1.0.0.2 or newer and SDK NuGet 1.0.1.',
+            'For local development, build/install the matching SDK and launch the sample manually.'
+        )
+}
 $assets = @($release.assets)
 Write-OK "Latest release: $tag ($($release.name))"
 
@@ -276,10 +280,11 @@ function Get-AssetUrl {
 
 # Asset names follow a fixed pattern: AionInstructPreview.LanguageModel.Framework_<ver>_<arch>.msix
 # and AionInstructPreview.Text.Framework.<nupkgVer>.nupkg.
-# The MSIX uses the 4-part package version (e.g. 1.0.0.0); the NuGet asset uses the
-# 3-part SemVer (e.g. 1.0.0). Derive the 3-part version for the nupkg name.
+# The contract NuGet is pinned independently of the framework release version.
 $expectedMsixName = "AionInstructPreview.LanguageModel.Framework_${targetFwVersion}_${arch}.msix"
-$nupkgVersion = ($targetFwVersion -split '\.')[0..2] -join '.'
+[xml]$sampleProject = Get-Content (Join-Path $PSScriptRoot 'AionInstructPreview.Chat.csproj') -Raw
+$nupkgVersion = ($sampleProject.Project.ItemGroup.PackageReference |
+    Where-Object { $_.Include -eq 'AionInstructPreview.Text.Framework' }).Version
 $expectedNupkgName = "AionInstructPreview.Text.Framework.${nupkgVersion}.nupkg"
 
 # --- 4. Framework MSIX state -----------------------------------------------
@@ -356,25 +361,33 @@ if (Test-Path $expectedNupkg) {
     Write-OK "Dropped $expectedNupkgName in nuget-local/"
 }
 
-# --- 5a. Acquire QNN execution provider (if needed) ------------------------
-# Keep this explicitly ARM64-gated so future x64 support does not attempt to
-# acquire Qualcomm's QNN provider.
+# --- 5a. Acquire the NPU execution provider (if needed) --------------------
+# ARM64 (Snapdragon) needs the Qualcomm QNN provider staged, which the acquisition tool
+# below does through the Windows ML catalog.
+#
+# x64 (Intel) needs MicrosoftCorporationII.WinML.Intel.OpenVINO.EP.1.8 (>= 1.8.15.0, the
+# MinimumPackageVersion in WinML's own EP catalog). This script does NOT acquire it, and it
+# is NOT reliably present: an Intel Lunar Lake box used for validation had only the
+# WindowsWorkload.EP.Intel.OpenVINO.Framework.1.8 companion package, which does not satisfy
+# the catalog. The SDK then failed every call with WinMLEpEnsureReady returning 0x80073D3B
+# and reason=no-npu-ep-available.
+#
+# Diagnose-AionInstructPreview.ps1 checks for it explicitly, so an x64 developer who lands
+# in that state gets told which package to install rather than an opaque runtime failure.
 if ($arch -eq 'ARM64') {
-    $qnnPackages = @(Get-AppxPackage -Name 'MicrosoftCorporationII.WinML.Qualcomm.QNN.EP.1.8*' -ErrorAction SilentlyContinue |
+    $qnnPackages = @(Get-AppxPackage -Name 'MicrosoftCorporationII.WinML.Qualcomm.QNN.EP.2*' -ErrorAction SilentlyContinue |
         Where-Object { $_.Architecture -eq $arch })
     if ($qnnPackages.Count -eq 0) {
         $acquireQnnProject = Join-Path $PSScriptRoot 'tools\AcquireQnnEp\AcquireQnnEp.csproj'
         Write-Step 'Preparing the QNN execution provider (this may download components) ...'
-        & dotnet run --project "$acquireQnnProject" -c Release -p:Platform=$arch | Out-Host
+        & dotnet run --project "$acquireQnnProject" -c Release -p:Platform=$arch @restoreArgs | Out-Host
         $acquireQnnExitCode = $LASTEXITCODE
         if ($acquireQnnExitCode -ne 0) {
             Stop-WithRecovery `
                 -Title "QNN execution provider acquisition failed (exit code $acquireQnnExitCode)" `
                 -Recovery @(
                     'Re-run the acquisition tool directly for full output:',
-                    "    dotnet run --project `"$acquireQnnProject`" -c Release -p:Platform=$arch",
-                    "Verify Windows App Runtime 1.8 v$War18MinVersion or newer is installed:",
-                    "    Get-AppxPackage -Name $War18PkgId",
+                    "    dotnet run --project `"$acquireQnnProject`" -c Release -p:Platform=$arch$restoreDisplay",
                     'Check internet access and install the latest Snapdragon NPU/QNN drivers.'
                 )
         }
@@ -392,7 +405,7 @@ if ($SkipLaunch) {
     Write-Host ''
     Write-OK 'Bootstrap complete (skipped chat app build/launch).'
     Write-Host 'Build and run manually:' -ForegroundColor Cyan
-    Write-Host "    dotnet run --project `"$csproj`" --launch-profile `"AionInstructPreview.Chat`" -c Release -p:Platform=$arch" -ForegroundColor Cyan
+    Write-Host "    dotnet run --project `"$csproj`" --launch-profile `"AionInstructPreview.Chat`" -c Release -p:Platform=$arch$restoreDisplay" -ForegroundColor Cyan
     return
 }
 
@@ -404,13 +417,13 @@ if ($existing) {
 }
 
 Write-Step "Building and launching AionInstructPreview.Chat ($arch, Release) via dotnet run ..."
-& dotnet run --project "$csproj" --launch-profile "AionInstructPreview.Chat" -c Release -p:Platform=$arch | Out-Host
+& dotnet run --project "$csproj" --launch-profile "AionInstructPreview.Chat" -c Release -p:Platform=$arch @restoreArgs | Out-Host
 if ($LASTEXITCODE -ne 0) {
     Stop-WithRecovery `
         -Title 'dotnet run failed' `
         -Recovery @(
             'Re-run directly for full output:',
-            "    dotnet run --project `"$csproj`" --launch-profile `"AionInstructPreview.Chat`" -c Release -p:Platform=$arch",
+            "    dotnet run --project `"$csproj`" --launch-profile `"AionInstructPreview.Chat`" -c Release -p:Platform=$arch$restoreDisplay",
             'Most likely causes:',
             '  - Developer Mode is off (Settings -> Privacy & security -> For developers).',
             '  - The .NET 9 SDK is not installed (run: dotnet --info to confirm).',

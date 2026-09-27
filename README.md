@@ -1,11 +1,23 @@
 # Aion Instruct Preview Chat
 
-A WinUI 3 desktop chat app that runs against the **AionInstructPreview** on-device language model on Copilot+ PCs. Tokens stream into the bubble as they're generated; first-token latency and tokens/sec are shown under each reply.
+A WinUI 3 desktop chat app that runs against the **AionInstructPreview** on-device language model on
+Copilot+ PCs. Text chunks stream into the bubble as they're generated; app-observed first-update
+latency and updates/sec are shown under each reply. A progress update is not an exact tokenizer token.
+
+Two tabs, two APIs: **Chat** drives `AionInstructPreview.Text` (multi-turn conversation, optional system
+prompt), and **Describe image** drives `AionInstructPreview.Imaging`. The preview follows the
+corresponding Windows App SDK public contracts for its supported members; it does not expose the
+entire in-box API.
 
 > **Preview notes**
 >
-> - **Platform support.** This preview runs on **ARM64 Copilot+ PCs (Snapdragon, QNN NPU)**. **x64 (Intel/AMD) support is coming soon.**
-> - **Performance.** The first-token latency and tokens/sec shown in the app are **preliminary — not final performance.** Runtime and model optimizations are underway, and these numbers will improve over time.
+> - **Platform support.** This preview ships **ARM64** (Snapdragon, QNN NPU) and **x64** (Intel, OpenVINO NPU) builds. The ARM64/QNN path is validated on hardware; the **x64/OpenVINO path has not yet been validated on an Intel NPU** — please file an issue with your results if you try it. AMD (VitisAI) is not yet supported.
+> - **Performance.** The first-update latency and updates/sec shown in the app are **preliminary,
+>   app-observed streaming measurements — not tokenizer throughput or final model performance.**
+>   Runtime and model optimizations are underway.
+> - **Moderation follow-up.** The moderation behavior described below requires the matching
+>   follow-up SDK metadata and runtime, not just the previously published packages. Release
+>   packaging is coordinated separately; these changes do not establish RAI qualification.
 
 ## Quickstart
 
@@ -38,7 +50,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
   The SDK picks the EP automatically via WinML's `ExecutionProviderCatalog` — whichever NPU EP the OS reports as `Certified + Ready` wins. A certified NPU EP is required — there is no CPU fallback.
 
-  > **x64 (Intel/AMD) support is coming soon.** This preview targets ARM64/Snapdragon only.
+  > **x64 is built but not yet hardware-validated.** ARM64/Snapdragon (QNN) is the validated path. x64 produces an Intel/OpenVINO build that has not been run on an Intel NPU yet; AMD (VitisAI) is not supported.
 
 **Build-time vs run-time — these are different things.** A common source of confusion (see [Troubleshooting](#troubleshooting)) is assuming a build error means a *runtime* component is missing. It usually doesn't. Keep the two lists straight:
 
@@ -60,13 +72,9 @@ That's it — no Visual Studio and no registry-installed Windows SDK are require
   ```
 
   (or grab the installer from <https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads>.) This runtime is needed only to **run**, not to build.
-- **Windows App Runtime 1.8** — provides the WinML stack the on-device model runs on:
-
-  ```powershell
-  winget install --id Microsoft.WindowsAppRuntime.1.8
-  ```
-
-  Both Windows App Runtimes are required at run time; `Bootstrap.ps1` checks for them and stops with the install command if either is missing.
+- **Inference runtime:** WinML and ORT are bundled in the Aion framework. The sample launchers do
+  not require Windows App Runtime 1.8. The separate legacy QNN acquisition helper still uses
+  WAR 1.8; that is not a prerequisite for launching an already-provisioned sample.
 - **.NET 9 Desktop Runtime** (`winget install --id Microsoft.DotNet.DesktopRuntime.9`, or the `windowsdesktop-runtime-9.0.x-win-<arch>.exe` installer). The .NET 9 SDK above already includes this, so you only need it separately on a run-only machine that has no SDK.
 - The Aion Instruct Preview **framework MSIX** installed for your arch — `Bootstrap.ps1` handles this (see [Quickstart](#quickstart)).
 
@@ -101,12 +109,43 @@ Developer Mode must also be on (same as the terminal path). Then open `AionInstr
 
 ## Quickstart details
 
+### Using an organization-managed NuGet feed
+
+The default configuration uses nuget.org plus `nuget-local` for the SDK contract. If your network
+requires an approved package mirror, supply an alternate NuGet configuration explicitly:
+
+```powershell
+.\Bootstrap.ps1 -NuGetConfig C:\local-config\sample.nuget.config
+.\unpackaged-console\Run.ps1 -NuGetConfig C:\local-config\sample.nuget.config
+.\unpackaged-wpf\Run.ps1 -NuGetConfig C:\local-config\sample.nuget.config
+```
+
+Use a configuration supplied by your organization. It must include the approved feed and the
+sample's `nuget-local` directory (use its absolute path when the configuration lives elsewhere).
+Include `<clear />` under `<packageSources>` to replace inherited sources rather than still
+querying nuget.org. Authenticate using the feed's supported credential provider; do not put
+tokens in source control. Feed access and availability of the required package versions are
+prerequisites. No automatic feed fallback or TLS verification bypass is performed.
+
+The override applies to NuGet restore for the sample and the QNN acquisition helper. It does not
+redirect GitHub release downloads, Windows runtime installation, or EP acquisition. The checked-in
+public feed configuration remains unchanged.
+
+For build-only validation, pass the same configuration directly:
+
+```powershell
+dotnet build .\AionInstructPreview.Chat.csproj -c Release -p:Platform=ARM64 `
+    "-p:RestoreConfigFile=C:\local-config\sample.nuget.config"
+```
+
 A few notes on the steps in the [Quickstart](#quickstart) above:
 
 - **Where to clone.** Put the repo under your user profile (e.g. `C:\repos` or `%USERPROFILE%`) — **not** under `C:\Windows\System32`. See the [Troubleshooting](#troubleshooting) note on System32 for why an elevated prompt's default directory breaks the build.
 - **`Set-ExecutionPolicy`.** Required on a machine with the default `Restricted` policy — otherwise `.\Bootstrap.ps1` fails with *"Bootstrap.ps1 cannot be loaded because running scripts is disabled on this system"*, even after a clean `git clone`. It's scoped to the current process, needs no admin, and reverts when you close the window.
 - **What `Bootstrap.ps1` does.** Detects your arch, enables Developer Mode if needed, pulls the latest signed Aion Instruct Preview release from this repo's public GitHub releases over HTTPS, installs the framework MSIX, drops the SDK NuGet, installs the QNN execution provider on ARM64 when its AppX package is missing, then builds and launches AionInstructPreview.Chat via `dotnet run`. Re-runs are idempotent.
-- **First launch.** Sits on **"Loading Aion Instruct Preview model…"** for ~3-5 minutes while the runtime compiles its QDQ ONNX models for the picked execution provider (QNN on Snapdragon NPU). This is a one-shot per device — every prompt after that is sub-second to first token on NPU.
+- **First launch.** Model loading can take several minutes while the runtime compiles NPU caches.
+  Valid caches are reused. Response latency depends on prompt length, hardware, and moderation;
+  the first progress callback is approved output, not a measurement of the model's first token.
 
 ---
 
@@ -181,9 +220,15 @@ See [`nuget.config`](nuget.config) in this repo for the working version. Once th
 An external project needs **both** of these `PackageReference`s in its csproj:
 
 ```xml
-<PackageReference Include="AionInstructPreview.Text.Framework" Version="1.0.*" />
+<PackageReference Include="AionInstructPreview.Text.Framework" Version="1.0.1" />
 <PackageReference Include="Microsoft.Windows.CsWinRT" Version="2.1.5" />
 ```
+
+Pin the SDK version exactly rather than floating with `1.0.*`. The local feed is a folder you
+populate by hand, so a wildcard silently resolves to whichever `.nupkg` happens to be sitting
+there — an older one is missing `AionInstructPreview.Imaging.winmd` and fails with `CS0246
+'ImageDescriptionGenerator' not found` rather than a version error. This sample requires
+**1.0.1** for the updated text API contract, as well as the imaging metadata.
 
 The CsWinRT reference is **not** optional and **not** implicit. CsWinRT's build targets — the ones that run the source generator turning `AionInstructPreview.Text.winmd` into C# — only import when `Microsoft.Windows.CsWinRT` is referenced **directly** by the project. Picking it up transitively (e.g. via the Windows App SDK) does **not** import those build targets, so the generator never runs and you get a wall of `CS0246 'Aion Instruct Preview' / 'LanguageModel' not found`. This sample's csproj already has both references, which is why copying our csproj "just works" — but a project you wire up from scratch must add the CsWinRT reference itself.
 
@@ -196,13 +241,14 @@ With the feed and both [required PackageReferences](#required-packagereferences)
 | Surface | What it does |
 |---|---|
 | `AionInstructPreview.Text.Framework.props` (auto-imported) | Adds `AionInstructPreview.Text.winmd` to `$(CsWinRTInputs)`. CsWinRT projects the runtimeclasses into C# at build time. |
-| `AionInstructPreview.Text.Framework.targets` (auto-imported) | Before pack, injects `<uap:PackageDependency Name="Microsoft.AionInstructPreview.Framework.1.0" MinVersion="1.0.0.0" Publisher="..."/>` into your `Package.appxmanifest`. Publisher defaults to the ESRP Microsoft Corporation subject — matches the framework MSIX shipped on the GitHub release. Override via `<AionInstructPreviewFrameworkPublisher>` in your csproj only if you're consuming a framework MSIX signed with a different subject. |
+| `AionInstructPreview.Text.Framework.targets` (auto-imported) | Before pack, injects the framework dependency with `MinVersion="1.0.0.2"` or raises an older minimum. Publisher defaults to the Microsoft Corporation subject used by the signed framework. Override `<AionInstructPreviewFrameworkPublisher>` only for a differently signed framework. |
 
 At runtime, Windows AppX resolves the framework dependency, loads `AionInstructPreview.Text.dll` out of the framework's deploy folder, and cross-package WinRT activation hands you the runtimeclasses.
 
 **No fusion manifest. No sibling-DLL deployment. No manual `<PackageDependency>` declaration. No HKLM registration.**
 
-In your own app you don't add any of this by hand — the targets inject the framework `<PackageDependency>` for you. (This sample keeps an explicit entry in its `Package.appxmanifest` only so the manifest reads as self-describing; the injector de-dupes by name and leaves it untouched. `Microsoft.WindowsAppRuntime.2` comes from the Windows App SDK, not the Aion injector.)
+The targets de-duplicate dependencies by name and raise older minimum versions. They also ensure
+the Windows App Runtime 2 dependency required by the SDK's imaging and content-safety types.
 
 #### Minimum integration checklist
 
@@ -255,7 +301,7 @@ int arch = RuntimeInformation.ProcessArchitecture == Architecture.Arm64
 TryCreatePackageDependency(
     /* user            */ IntPtr.Zero,
     /* packageFamily   */ "Microsoft.AionInstructPreview.Framework.1.0_8wekyb3d8bbwe",
-    /* minVersion      */ 0UL,     // any installed version
+    /* minVersion      */ (1UL << 48) | 2UL, // 1.0.0.2
     /* architectures   */ arch,
     /* lifetimeKind    */ 0,       // Process
     /* lifetimeArtifact*/ null,
@@ -266,7 +312,9 @@ AddPackageDependency(depId, /* rank */ 0, /* options */ 0, out _, out _);
 
 From there, `LanguageModel.CreateAsync()` and the rest of the API are called exactly as in the packaged sample — see [`MainWindow.xaml.cs`](unpackaged-wpf/MainWindow.xaml.cs), which streams responses into the UI by marshaling the `Progress` callback onto the dispatcher thread.
 
-Prerequisites are the same as the packaged path (the framework MSIX installed, the SDK NuGet on a feed, WindowsAppRuntime 2, WindowsAppRuntime 1.8, .NET SDK 9+); `Run.ps1` checks that the framework package and both runtimes are present before building.
+Prerequisites are the same as the packaged path: the matching framework MSIX, SDK NuGet,
+Windows App Runtime 2, and .NET SDK 9+. `Run.ps1` checks the framework minimum version and WAR 2
+before building.
 
 ### Calling the API
 
@@ -276,25 +324,65 @@ using AionInstructPreview.Text;
 // Loads the model. Long-running on first launch (NPU compile), instant after.
 using var model = await LanguageModel.CreateAsync();
 
-// Streaming generation. Progress delivers the LATEST token, not accumulated text.
-var op = model.GenerateResponseAsync("Why are Aion Instruct Preview responses better than scones?");
-op.Progress = (_, token) => Console.Write(token);   // token = just the new piece
+using var context = model.CreateContext(); // reuse for multi-turn history
+
+// Final-only display: a streamed result may still be blocked by a later check.
+// Explicit options preserve this sample's previous sampling settings; null is rejected.
+var options = new LanguageModelOptions { Temperature = 0.5f, TopP = 0.9f, TopK = 40 };
+var op = model.GenerateResponseAsync(
+    context, "Why are Aion Instruct Preview responses better than scones?", options);
 var result = await op;
 
-Console.WriteLine();
-Console.WriteLine($"Full response: {result.Text}");   // accumulated text lives here
-Console.WriteLine($"Final status:  {result.Status}");
+if (result.Status == LanguageModelResponseStatus.Complete)
+{
+    Console.WriteLine(result.Text);
+}
+else
+{
+    Console.WriteLine($"No final response is available ({result.Status}).");
+}
 ```
 
-**Streaming semantics.** The `Progress` callback's signature is `(asyncInfo, token)`. The second argument, `token`, is just the **latest token** — the newly generated text since the last callback, not the running total. The first argument is the async operation (usually ignored, `_`). The **full, accumulated response** comes from awaiting the operation — `LanguageModelResponseResult.Text`. So append tokens as they arrive for a live typing effect, and read `result.Text` for the complete string at the end (concatenating the tokens yields the same text).
+**Streaming semantics.** The `Progress` callback's signature is `(asyncInfo, delta)`. The second
+argument is the **latest text chunk** — the newly generated text since the last callback, not the
+running total and not necessarily one tokenizer token. The first argument is the async operation
+(usually ignored, `_`). The **full, accumulated response** comes from awaiting the operation —
+`LanguageModelResponseResult.Text`. Append chunks as they arrive for a live typing effect, and read
+`result.Text` only when the terminal status is `Complete`. The example above deliberately waits
+for completion instead of displaying partial text.
 
-This sample's [`AionInstructClient.cs`](AionInstructClient.cs) is a slightly fancier version that holds the session context plus measures TTFT and tokens/sec; [`ViewModels/ChatViewModel.cs`](ViewModels/ChatViewModel.cs) shows how to marshal the background-thread Progress callback back to the UI thread via `DispatcherQueue` AND how to surface `PromptLargerThanContext` as a "New conversation" affordance instead of a generic error. For the unpackaged equivalent, [`unpackaged-wpf/MainWindow.xaml.cs`](unpackaged-wpf/MainWindow.xaml.cs) shows the identical API driving a plain WPF window.
+This sample's [`AionInstructClient.cs`](AionInstructClient.cs) holds the session context and uses a
+local `Stopwatch` to measure first-update latency, elapsed time to completion, and progress
+updates/sec. The rate is `(updateCount - 1)` divided by the time from the first update to operation
+completion, including completion overhead; it is not pure model decode throughput. No first-update
+latency is reported when there are no updates, and no rate is reported with fewer than two updates.
+[`Models/GenerationMetrics.cs`](Models/GenerationMetrics.cs) shares these conventions with image
+description. [`ViewModels/ChatViewModel.cs`](ViewModels/ChatViewModel.cs) shows how to marshal the
+background-thread Progress callback back to the UI thread via `DispatcherQueue` AND how to surface
+`PromptLargerThanContext` as a "New conversation" affordance instead of a generic error. For the
+unpackaged equivalent, [`unpackaged-wpf/MainWindow.xaml.cs`](unpackaged-wpf/MainWindow.xaml.cs) shows
+the identical API driving a plain WPF window.
 
 ---
 
 ## API surface used
 
-The `AionInstructPreview.Text` namespace mirrors [`Microsoft.Windows.AI.Text`](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.windows.ai.text?view=windows-app-sdk-2.0) from Windows App SDK 2.0 — same class shapes, same method signatures, same `IAsyncOperationWithProgress` streaming semantics. Code written against the documented WinAppSDK surface ports to Aion Instruct Preview by changing the `using` statement; this sample shows the subset of the API a chat client needs.
+The `AionInstructPreview.Text` namespace follows the supported public contracts of
+[`Microsoft.Windows.AI.Text`](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.windows.ai.text?view=windows-app-sdk-2.0)
+from Windows App SDK 2.0, including `IAsyncOperationWithProgress` streaming semantics. Use the
+preview namespace for both `LanguageModel` and `LanguageModelOptions`; the preview implements a
+subset, not every in-box member.
+
+**Migrating to SDK 1.0.1:** replace `GenerateResponseAsync(context, prompt)` with
+`GenerateResponseAsync(context, prompt, options)`. Options cannot be `null`. To preserve this
+sample's previous behavior, use
+`new LanguageModelOptions { Temperature = 0.5f, TopP = 0.9f, TopK = 40 }`.
+Preview-only diagnostics have been removed: results no longer expose `TokenCount`,
+`TimeToFirstToken`, or `DecodeDuration`, and the model no longer exposes `GetTokenCount`,
+`MaxPromptTokenCount`, or `ContextLength`. Measure app-observed timing locally instead; callback
+counts are progress updates, not exact token counts. Rebuild consumers with NuGet **1.0.1** and run
+against framework **1.0.0.2**. This is a breaking preview contract change; compatibility with
+previously built consumer binaries is not promised.
 
 Cross-link the WinAppSDK reference for full member docs:
 
@@ -304,35 +392,153 @@ Cross-link the WinAppSDK reference for full member docs:
 |---|---|
 | [`static CreateAsync()`](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.windows.ai.text.languagemodel.createasync?view=windows-app-sdk-2.0) | `AionInstructClient.CreateAsync` calls this once at startup; long-running on first launch (NPU compile). |
 | [`CreateContext()`](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.windows.ai.text.languagemodel.createcontext?view=windows-app-sdk-2.0) | Opens a fresh conversation context. Called once on startup and again on "New conversation". |
-| [`GenerateResponseAsync(LanguageModelContext, String)`](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.windows.ai.text.languagemodel.generateresponseasync?view=windows-app-sdk-2.0) | Streaming generation rooted in the session context — every chat send hits this overload. Progress fires per-token deltas; awaiting the operation returns the final `LanguageModelResponseResult`. |
+| `CreateContext(String)` | Opens a context with a **system prompt** that steers every turn in that conversation. The sample's "System prompt" expander maps to this overload. A context is immutable once created, so a changed prompt only takes effect on the next `CreateContext` — which is why the UI applies it via "New conversation". |
+| [`GenerateResponseAsync(LanguageModelContext, String, LanguageModelOptions)`](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.windows.ai.text.languagemodel.generateresponseasync?view=windows-app-sdk-2.0) | Streaming generation rooted in the session context — every chat send hits this overload with explicit options preserving prior sampling settings. Progress delivers text chunks; awaiting the operation returns the final `LanguageModelResponseResult`. |
 | [`GenerateResponseAsync(String)`](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.windows.ai.text.languagemodel.generateresponseasync?view=windows-app-sdk-2.0) | Context-less single-shot variant; supported by Aion Instruct Preview, not used by this sample. |
+| `GenerateResponseAsync(String, LanguageModelOptions)` | Context-less single-shot variant with explicit, non-null options. |
 | [`Close()`](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.windows.ai.text.languagemodel.close?view=windows-app-sdk-2.0) / `Dispose()` | Releases the model on window close. `IClosable.Close()` projects to `IDisposable.Dispose()` in C#. |
 
 ### [`LanguageModelContext`](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.windows.ai.text.languagemodelcontext?view=windows-app-sdk-2.0)
 
-Returned by `LanguageModel.CreateContext()`. Carries the in-process conversation history across multiple `GenerateResponseAsync` calls — every turn's prompt + response feeds the next. `AionInstructClient.StartNewConversation` disposes the current context and calls `CreateContext()` again, which is what the UI's "New conversation" button maps to.
+Returned by `LanguageModel.CreateContext()`. Carries in-process conversation history across
+multiple `GenerateResponseAsync` calls. The sample retains the same context after blocked turns,
+following inbox behavior; it does not automatically start a new conversation or promise that a
+failed turn left the context unchanged. `AionInstructClient.StartNewConversation` creates the new
+context before disposing the old one, so a rejected system prompt preserves the existing context.
 
 ### [`LanguageModelResponseResult`](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.windows.ai.text.languagemodelresponseresult?view=windows-app-sdk-2.0)
 
 | Member | Sample usage |
 |---|---|
-| `Text` | Final accumulated response text. The streaming UI already has the text from the Progress deltas, so this is mostly used as a cross-check. |
+| `Text` | Final accumulated response text. Display only when `Status` is `Complete`. |
 | `Status` | `LanguageModelResponseStatus` — terminal state for the call. `ChatViewModel.SendAsync` branches on this. |
+
+### `LanguageModelOptions`
+
+`AionInstructPreview.Text.LanguageModelOptions` exposes only `Temperature`, `TopP`, `TopK`,
+and `ContentFilterOptions`. It does not expose LoRA configuration. New options default to
+`Temperature = 0.9f`, `TopP = 0.9f`, and `TopK = 40`. The sample explicitly sets `Temperature = 0.5f`
+and retains `TopP = 0.9f` and `TopK = 40` to preserve its previous chat behavior. The prompt-only
+overload also retains those previous settings. Passing `null` options is rejected.
+
+`ContentFilterOptions` is constructed by default and enables moderation. The sample keeps the
+default filters; it does not expose filter settings in the UI. See [Content moderation](#content-moderation).
 
 ### [`LanguageModelResponseStatus`](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.windows.ai.text.languagemodelresponsestatus?view=windows-app-sdk-2.0)
 
-The sample reacts to two of the eight documented values:
+The preview exposes these values (not every value in the inbox enum):
 
-| Value | What the sample does |
-|---|---|
-| `Complete` | Treat as success; commit the bubble + show metrics. |
-| `PromptLargerThanContext` | Switch the UI to a "New conversation" affordance instead of a generic error. The conversation has filled Aion Instruct Preview's context window. |
-
-Other values (`InProgress`, `BlockedByPolicy`, `PromptBlockedByContentModeration`, `ResponseBlockedByContentModeration`, `Error`, `IncompatibleLowRankAdapter`) collapse to a generic error path today — opportunity to differentiate the UX.
+| Value | Number | What the sample does |
+|---|---|---|
+| `Complete` | 0 | Display the final response and metrics. |
+| `InProgress` | 1 | Progress callbacks append text; this is not a successful terminal result. |
+| `PromptLargerThanContext` | 3 | Clear partial output; WinUI offers "New conversation". |
+| `PromptBlockedByContentModeration` | 4 | Clear partial output and explain that the prompt was blocked. |
+| `ResponseBlockedByContentModeration` | 5 | Clear partial output and explain that the response was blocked. |
+| `Error` | 6 | Clear partial output and report an operational failure, not a moderation decision. |
 
 ### Streaming semantics
 
-Progress callbacks deliver **per-token deltas**, not the accumulated text. `ChatViewModel.SendAsync` appends each delta to the current Aion Instruct Preview message via `DispatcherQueue.TryEnqueue`, which is what gives the typewriter-style streaming feel.
+Progress callbacks deliver **text chunks**, not the accumulated text or guaranteed individual
+tokens. `ChatViewModel.SendAsync` appends each delta to the current Aion Instruct Preview message via
+`DispatcherQueue.TryEnqueue`, which is what gives the typewriter-style streaming feel. Image
+description uses the same delta contract.
+
+### Content moderation
+
+The moderation follow-up uses the text content moderation model (TCM), image content moderation
+model (ICM), and inbox blocklists. Default options enable filtering for prompts, generated text,
+images, and text extracted from images. Filters are not a guarantee of safe or accurate output.
+`PromptMaxAllowedSeverityLevel` and `ResponseMaxAllowedSeverityLevel` configure text categories
+separately; `ImageMaxAllowedSeverityLevel` configures image categories. The default maximum
+allowed severity is `Low` per category: a higher classified severity is blocked. These settings
+are policy thresholds, not a model-quality score; the sample does not relax them.
+This sample keeps the default `Low` policy and has no filter-settings editor. Supported custom
+severity settings differ between the text and image-description APIs; do not assume they are
+interchangeable. Missing or null filter options,
+including null nested severity objects, use `Low` defaults rather than disabling moderation.
+Moderation and inbox blocklists are mandatory; there is no off flag or unfiltered fallback.
+Text-only requests ignore image severity options. The SDK
+snapshots policy before asynchronous work, so later mutations do not change an in-flight request.
+Missing or failed moderation models or blocklist payloads fail the operation rather than allowing
+unfiltered output. These checks run locally; they do not require cloud moderation or installation
+of the inbox moderation MSIX packages.
+
+WinUI and WPF keep already accepted partial text visible while generation is in progress. A later
+check may still block the final result: on any terminal block or error, they clear that response's
+partial text and ignore queued dispatcher updates. Earlier conversation entries remain. A typed
+prompt or user-provided thumbnail may remain visible; its presence is not a moderation approval.
+The console cannot retract text already printed to a terminal or redirected file. It labels a
+blocked or failed result as having **no final response**, warns to disregard earlier streamed text,
+and exits unsuccessfully. Use final-only display, as above, if that limitation is unacceptable.
+Even accepted updates are not a guarantee about later checks or conversation-context changes.
+
+Moderation blocks are distinct from runtime, model-loading, and filtering failures. Exception UI
+uses a fixed message and HRESULT, never exception text that might contain rejected content.
+`CreateContext(systemPrompt)` can itself reject a system prompt with `0x8A1F0202`; WinUI catches
+this on both first send and "New conversation", so the user can revise it without losing the
+previous context. A blocked turn does not trigger an automatic conversation reset.
+
+These are integration and UX behaviors, not evidence of model-quality or RAI qualification.
+Runtime validation requires the matching moderation models and framework on supported hardware.
+
+---
+
+## Image description
+
+The **Describe image** tab uses `AionInstructPreview.Imaging`, which mirrors
+[`Microsoft.Windows.AI.Imaging`](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.windows.ai.imaging?view=windows-app-sdk-2.0).
+As with the text API, porting to the inbox stack is a `using` change.
+
+```csharp
+using AionInstructPreview.Imaging;
+using Microsoft.Graphics.Imaging;
+using Microsoft.Windows.AI.ContentSafety;
+
+using var generator = await ImageDescriptionGenerator.CreateAsync();
+
+var op = generator.DescribeAsync(
+    imageBuffer,                               // Microsoft.Graphics.Imaging.ImageBuffer
+    ImageDescriptionKind.DetailedDescription,
+    new ContentFilterOptions());
+var result = await op;
+if (result.Status == ImageDescriptionResultStatus.Complete)
+{
+    Console.WriteLine(result.Description);
+}
+else
+{
+    Console.WriteLine($"No final description is available ({result.Status}).");
+}
+```
+
+| Member | Notes |
+|---|---|
+| `static ImageDescriptionGenerator.CreateAsync()` | Loads SigLIP2 using a validated persistent NPU cache and loads the projector on CPU. First-run cache compilation can take several minutes. Create it once and keep it. |
+| `DescribeAsync(ImageBuffer, ImageDescriptionKind, ContentFilterOptions)` | Streams text chunks via `Progress`; the full text is `ImageDescriptionResult.Description`. |
+| `ImageDescriptionKind` | `BriefDescription`, `DetailedDescription`, `DiagramDescription`, `AccessibleDescription`. |
+| `ImageDescriptionResult.Status` | `Complete` on success. WinUI distinguishes `ImageBlockedByContentModeration`, `TextInImageBlockedByContentModeration`, and `DescriptionTextBlockedByContentModeration` from operational failures. |
+
+**Pixel formats.** `ImageBuffer` must be `Rgb8`, `Argb8`, `Bgra8`, or `Gray8`. `Bgr8` and `Rgba8`
+are rejected — they have no byte-order-equivalent in the underlying stack, and silently mapping
+them onto a near-miss would feed the encoder swapped channels. Convert before you call.
+[`AionImageDescriptionClient.cs`](AionImageDescriptionClient.cs) shows the `BitmapDecoder` →
+`Bgra8` → `ImageBuffer.CreateForBuffer` path.
+
+### Preview limitations
+
+> - **Moderation is enabled by default.** `DescribeAsync` honors `ContentFilterOptions`.
+>   Image, extracted-text, and generated-description blocks have separate result statuses.
+>   See [Content moderation](#content-moderation) for streaming limits and failure handling.
+> - **OCR differs from the inbox stack.** Text in the image is extracted with the inbox
+>   `Windows.Media.Ocr` engine rather than the OneOCR model the shipping stack uses, because
+>   OneOCR's model key can't be redistributed in a sideloadable package. Expect lower text
+>   fidelity on text-dense images. OCR is best-effort: a failure yields an empty string and
+>   description continues.
+> - **Description accuracy is under investigation.** Descriptions are fluent but can be
+>   incorrectly grounded relative to the shipping in-box implementation. This is being tracked
+>   as a vision-model/projector version-pairing issue. Treat image description in this preview as
+>   an **API-compatibility** surface, not a quality baseline.
 
 ---
 
@@ -360,12 +566,14 @@ Start here if `Bootstrap.ps1`, the build, or the app fails.
 
 - **`cswinrt.exe exited with code 1`, or a XAML compiler `WMC9999` NullReferenceException** → you're almost certainly building under **`C:\Windows\System32`** (the default directory of an *elevated* PowerShell prompt). UAC file virtualization silently redirects writes under `obj\…\Generated Files\`, so `cswinrt.exe` and the XAML compiler write to and read from different paths and the codegen falls apart. **Do not clone or build under `C:\Windows\System32`.** Clone under your user profile (e.g. `%USERPROFILE%` or `C:\repos`) and build from a normal (non-elevated) prompt — building does not require admin. (The one UAC prompt `Bootstrap.ps1` raises is just to enable Developer Mode; it does not mean you should be running from System32.)
 
-- **A build error usually does *not* mean a runtime component is missing.** The Windows App Runtimes (WAR 2 and WAR 1.8) are *run-time* dependencies and are not what's failing your build. The only build requirement is the **.NET 9 SDK** (plus Developer Mode for `dotnet run` to register the app). See [Prerequisites → To BUILD the sample](#prerequisites).
+- **A build error usually does *not* mean a runtime component is missing.** Windows App Runtime 2
+  is a runtime dependency. Building requires the .NET 9 SDK and package restore; Developer Mode
+  is also needed for `dotnet run` to register the app.
 
 ### Runtime and deployment
 
 - **`0x80073D19` "package family does not have any matching framework packages installed"** when deploying the consumer MSIX → the Aion Instruct Preview framework MSIX isn't installed. `Get-AppxPackage Microsoft.AionInstructPreview.Framework.1.0` should return a row.
-- **`NuGet restore` fails with package not found** → the SDK NuGet isn't in `./nuget-local/`. The wildcard `Version="1.0.*"` is intentional; it picks up any 1.0.x build.
+- **`NuGet restore` fails with package not found** → put `AionInstructPreview.Text.Framework.1.0.1.nupkg` in `./nuget-local/`. This sample uses an exact version pin.
 - **App crashes immediately with class-not-registered** → cross-package WinRT activation can't find the runtimeclasses. The framework MSIX must be installed (its cert is imported when you first install it), and the consumer must have package identity — `dotnet run` provides that via its development registration.
 - **Stale NuGet cache after a release bump** → `Remove-Item -Recurse -Force "$env:USERPROFILE\.nuget\packages\aioninstructpreview.text.framework"`, then rebuild.
 - **`Bootstrap.ps1` fails to download the release** → confirm a release exists at <https://github.com/microsoft/Aion-Instruct-Preview-Sample/releases>. If you're behind a corporate proxy, set `HTTPS_PROXY` and re-run. You can also download the three assets manually from that page (see [Manual install](#manual-install-what-bootstrapps1-does)).
@@ -394,16 +602,17 @@ The most common failure mode is the SDK failing to initialize because no certifi
 ```
 Aion-Instruct-Preview-Sample/
 ├── App.xaml / App.xaml.cs           # WinAppSDK app entry
-├── MainWindow.xaml / .cs            # Chat UI: Mica, custom title bar, transcript, input
+├── MainWindow.xaml / .cs            # Chat + Describe image tabs, Mica, custom title bar
 ├── Controls/
 │   └── TypingIndicator.xaml(.cs)    # Three-dot pulsing "Aion Instruct Preview is thinking" indicator
 ├── Models/
 │   ├── Message.cs                   # One transcript entry; mutable Text for streaming
 │   ├── ModelState.cs                # enum: Loading | Ready | Generating | Error
-│   └── GenerationMetrics.cs         # Per-response timing: TTFT, tok/s, token count
+│   └── GenerationMetrics.cs         # App timing: first update, updates/s, update count
 ├── ViewModels/
-│   └── ChatViewModel.cs             # Conversation, state machine, Send command
+│   └── ChatViewModel.cs             # Conversation, state machine, Send + Describe commands
 ├── AionInstructClient.cs                  # Async wrapper over AionInstructPreview.Text.LanguageModel
+├── AionImageDescriptionClient.cs          # Async wrapper over AionInstructPreview.Imaging.ImageDescriptionGenerator
 ├── Package.appxmanifest             # MSIX identity. PackageDependency injected at build.
 ├── AionInstructPreview.Chat.csproj               # .NET 9 WinUI 3 packaged csproj
 ├── nuget.config                     # Feeds: nuget.org + ./nuget-local/

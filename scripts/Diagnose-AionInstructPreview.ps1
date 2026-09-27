@@ -40,6 +40,7 @@ if ($nativeArch) {
 
 $arch = switch ($rawArch) {
     'ARM64' { 'ARM64' }
+    'AMD64' { 'x64' }
     default { $null }
 }
 
@@ -88,14 +89,22 @@ $ci = Get-ComputerInfo -Property CsManufacturer, CsModel, CsProcessors -ErrorAct
 if ($ci) {
     $proc = $ci.CsProcessors | Select-Object -First 1
     $procName = if ($proc) { $proc.Name } else { '(unknown)' }
-    $detail = "Manufacturer: $($ci.CsManufacturer)`nModel: $($ci.CsModel)`nProcessor: $procName`nProcess architecture: $emulatedArch`nNative architecture: $nativeArch`nResolved architecture: $rawArch"
+    # PROCESSOR_ARCHITEW6432 is only set under WOW64, so on a native 64-bit shell it is
+    # legitimately empty. Say so rather than printing a blank next to two populated lines,
+    # which reads like a detection failure.
+    $nativeArchDisplay = if ($nativeArch) { $nativeArch } else { '(not set -- native 64-bit shell, not WOW64)' }
+    $detail = "Manufacturer: $($ci.CsManufacturer)`nModel: $($ci.CsModel)`nProcessor: $procName`nProcess architecture: $emulatedArch`nNative architecture: $nativeArchDisplay`nResolved architecture: $rawArch"
 
     if ($arch -eq 'ARM64' -and $procName -match 'Snapdragon|Qualcomm|Hexagon|Oryon') {
         Write-Check PASS 'Snapdragon ARM64 (Copilot+ PC class) -- QNN NPU path expected' $detail
     } elseif ($arch -eq 'ARM64') {
         Write-Check WARN 'ARM64 but processor name doesn''t match a known Snapdragon SKU' $detail
-    } elseif ($rawArch -eq 'AMD64') {
-        Write-Check WARN 'x64 host -- x64 (Intel/AMD) support is coming soon; this preview supports ARM64/Snapdragon (QNN NPU) only' $detail
+    } elseif ($arch -eq 'x64' -and $procName -match 'Intel|Core\s*Ultra|Lunar|Arrow|Meteor') {
+        Write-Check PASS 'Intel x64 (Copilot+ PC class) -- OpenVINO NPU path expected' $detail
+    } elseif ($arch -eq 'x64') {
+        Write-Check WARN ('x64 host, but the processor name does not match a known Intel Copilot+ SKU. ' +
+            'AMD (VitisAI) is not yet validated for this preview; the SDK will fall back to CPU if no ' +
+            'certified NPU provider is found.') $detail
     } else {
         Write-Check WARN ('Unexpected architecture: ' + $rawArch) $detail
     }
@@ -143,8 +152,7 @@ function Check-Package {
             Write-Check FAIL ("$Friendly not installed (Get-AppxPackage $Name returned nothing)")
         } else {
             Write-Check WARN ("$Friendly not installed (optional)")
-        }
-        return
+        }        return
     }
     foreach ($pkg in $pkgs) {
         $detail = "PackageFullName: $($pkg.PackageFullName)`nArchitecture: $($pkg.Architecture)  Version: $($pkg.Version)"
@@ -158,13 +166,40 @@ function Check-Package {
 
 Check-Package -Name 'Microsoft.AionInstructPreview.Framework.1.0' -Friendly 'Aion Instruct Preview framework MSIX'
 Check-Package -Name 'Microsoft.WindowsAppRuntime.2' -Friendly 'Windows App Runtime 2' -MinVersion '2.0.1.0'
-Check-Package -Name 'Microsoft.WindowsAppRuntime.1.8' -Friendly 'Windows App Runtime 1.8' -MinVersion '8000.836.2153.0'
 if ($arch -eq 'ARM64') {
-    Check-Package -Name 'MicrosoftCorporationII.WinML.Qualcomm.QNN.EP.1.8*' -Friendly 'Qualcomm QNN execution provider 1.8'
+    # QNN EP 2, not 1.8. The muffin shared-context groups only compile on the newer
+    # provider: EP 2.2451.48 fails all six cacheable models while 2.2480.49 passes all
+    # six, so a machine carrying only the 1.8 provider will fail during the first
+    # CreateAsync with an opaque cache error.
+    Check-Package -Name 'MicrosoftCorporationII.WinML.Qualcomm.QNN.EP.2*' `
+                  -Friendly 'Qualcomm QNN execution provider 2' -MinVersion '2.2480.49.0'
+} elseif ($arch -eq 'x64') {
+    # Intel's OpenVINO provider. Pinned from evidence gathered on an Intel Lunar Lake box:
+    # the SDK failed all six tests with WinMLEpEnsureReady returning 0x80073D3B ("the
+    # product is not applicable or cannot be found") until THIS package was installed, and
+    # installing it flipped every test to pass with nothing else changed.
+    #
+    # 1.8.15.0 is the MinimumPackageVersion from WinML's own embedded EP catalog, not a
+    # guess. Observed working: 1.8.82.0.
+    #
+    # WindowsWorkload.EP.Intel.OpenVINO.Framework.1.8 does NOT substitute for this -- it was
+    # present on that box throughout the failure. Only the MicrosoftCorporationII...EP
+    # package satisfies the catalog.
+    Check-Package -Name 'MicrosoftCorporationII.WinML.Intel.OpenVINO.EP.1.8*' `
+                  -Friendly 'Intel OpenVINO execution provider' -MinVersion '1.8.15.0'
 }
-Check-Package -Name 'AionInstructPreviewChat' -Friendly 'AionInstructPreview.Chat consumer app'
+# The packaged WinUI app is optional: the console and WPF samples are equally valid
+# consumers, and a developer using only those should not get a hard failure here.
+Check-Package -Name 'AionInstructPreviewChat' -Friendly 'AionInstructPreview.Chat consumer app' -Required $false
 
-# Wider EP package sweep -- names vary by SKU / channel.
+# Wider EP package sweep -- informational only.
+#
+# Deliberately INFO, never PASS. This is a loose name match that also catches unrelated
+# packages (Microsoft.Windows.Apprep.ChxApp, the various *.Framework.* companions), so a
+# non-zero count says nothing about whether the SDK can actually run. It previously
+# reported PASS on a machine whose required OpenVINO EP was missing and where the SDK
+# could not start at all. The pinned per-architecture checks above are the real gate;
+# this list is here to help a human see what is present.
 Write-Host ''
 Write-Host '       (scanning for execution-provider packages...)' -ForegroundColor DarkGray
 $epPackages = @(Get-AppxPackage | Where-Object {
@@ -172,9 +207,9 @@ $epPackages = @(Get-AppxPackage | Where-Object {
 })
 if ($epPackages.Count -gt 0) {
     $detail = ($epPackages | ForEach-Object { '{0,-65} {1,-12} {2}' -f $_.Name, $_.Architecture, $_.Version }) -join "`n"
-    Write-Check PASS ("Found $($epPackages.Count) EP-related package(s)") $detail
+    Write-Check INFO ("$($epPackages.Count) EP-related package(s) present (informational -- see the pinned check above)") $detail
 } else {
-    Write-Check WARN 'No QNN/EP packages found via AppX -- catalog may still know about them via Windows Update channels'
+    Write-Check INFO 'No EP-related packages found via AppX (informational -- see the pinned check above)'
 }
 
 # ---------------------------------------------------------------------------
@@ -455,7 +490,22 @@ if ($alreadyRunning -and $script:cachedEp) {
 # identifies the selected EP.
 $skipLiveCapture = $alreadyRunning -and $script:cachedEp -and -not $SkipLaunch
 
-if ($skipLiveCapture) {
+# Also skip when there is nothing that could possibly emit: the packaged app is not
+# installed and we were not asked to wait for a manual launch. Otherwise the script spends
+# its full capture window waiting for an app it has already reported it cannot start --
+# which is the normal case for a developer using only the console or WPF sample.
+$noAppToCapture = -not $SkipLaunch -and -not $alreadyRunning -and
+                  -not (Get-AppxPackage AionInstructPreviewChat -ErrorAction SilentlyContinue)
+
+if ($noAppToCapture) {
+    $msg = 'Live capture skipped -- AionInstructPreview.Chat is not installed, so nothing would emit. '
+    $msg += if ($script:cachedEp) {
+        "EP is already known from the cache above: $($script:cachedEp)."
+    } else {
+        'Run one of the samples, then rerun with -SkipLaunch to capture passively.'
+    }
+    Write-Check INFO $msg
+} elseif ($skipLiveCapture) {
     Write-Check INFO ('Live capture skipped -- EP already reported from cache above. Use -SkipLaunch for a passive live capture, or close the app and rerun for a fresh cold-launch capture.')
 } elseif (-not ($capture = New-Object OdsCapture) -or -not $capture.Start()) {
     Write-Check FAIL ('Could not start ODS capture: ' + $(if ($capture) { $capture.LastError } else { 'capturer type unavailable' }))
@@ -540,7 +590,9 @@ if ($skipLiveCapture) {
                 }
                 '^no-catalog$' {
                     Write-Check FAIL ('SDK could not enumerate the WinML catalog -- falling back to ' + $device + '. ' +
-                        'Indicates WindowsAppRuntime 2 / Microsoft.Windows.AI.MachineLearning.dll is not loading correctly.')
+                        "The framework ships its own Microsoft.Windows.AI.MachineLearning.dll and onnxruntime.dll, " +
+                        'so this points at a damaged framework package rather than a missing Windows App Runtime. ' +
+                        'Reinstall the Aion Instruct Preview framework MSIX.')
                 }
                 default {
                     Write-Check WARN ("Captured EP decision but reason='$reason' is unrecognized (newer SDK?). EP=$ep Device=$device")
