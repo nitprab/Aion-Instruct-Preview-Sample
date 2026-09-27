@@ -60,14 +60,13 @@ if ($LASTEXITCODE -ne 0) {
     throw "Console sample build failed (exit $LASTEXITCODE); no executable was launched."
 }
 
-# Run the built executable directly so captured output contains only the sample app.
-$exe = Get-ChildItem -Path (Join-Path $here "bin\Release") -Filter "AionInstructPreview.Chat.Console.exe" -Recurse |
-    Sort-Object LastWriteTime -Descending |
-    Select-Object -First 1
-if (-not $exe) {
-    Write-Error "Build succeeded but AionInstructPreview.Chat.Console.exe was not found under bin\Release."
-    exit 1
+# Resolve this build's output rather than selecting a stale or wrong-architecture executable.
+$targetPath = & dotnet msbuild $csproj -nologo -p:Configuration=Release -getProperty:TargetPath @restoreArgs
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($targetPath)) {
+    throw "Could not resolve the console sample build output (exit $LASTEXITCODE)."
 }
+$exePath = [IO.Path]::ChangeExtension($targetPath.Trim(), '.exe')
+$exe = Get-Item -LiteralPath $exePath -ErrorAction Stop
 
 $argList = @()
 if ($Prompt) { $argList = $Prompt }
