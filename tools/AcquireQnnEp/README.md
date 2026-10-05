@@ -1,8 +1,11 @@
 # AcquireQnnEp
 
-`AcquireQnnEp` is an unpackaged ARM64 C# console utility that uses the Windows
-App SDK 1.8 Windows ML catalog to locate the Qualcomm QNN execution provider,
-download or prepare it when needed, and register it for the current process.
+`AcquireQnnEp` is an optional legacy ARM64 diagnostic utility that uses the Windows
+App SDK 1.8 Windows ML catalog. It is not part of `Bootstrap.ps1`: the framework's bundled
+WinML catalog acquires the compatible QNN EP 2 when the model first loads.
+The older catalog can report QNN ready after staging an EP that does not meet this SDK's
+`2.2480.49` floor. Do not use this utility's success as proof that the current SDK is
+provisioned; use the SDK model-creation path instead.
 
 ## Prerequisites
 
@@ -18,15 +21,14 @@ set. The utility explicitly loads the installed Windows App Runtime 1.8 package
 before activating the Windows ML catalog; the Windows App SDK automatic
 bootstrap initializer is disabled.
 
-Runtime activation uses the `8000.836.2153.0` GA floor also required by
-`Microsoft.AionInstructPreview.Framework.1.0`. Although the build-time Runtime
-NuGet identifies its own AppX build as `8000.859.21.0`, the Aion Instruct SDK
-pins the GA floor because the ORT/QNN generation remains compatible within the
-Windows App Runtime 1.8 line.
+Runtime activation uses the `8000.836.2153.0` GA floor. The framework itself uses
+Windows App Runtime 2 for imaging and content-safety types; the separate 1.8 runtime
+is needed only if you run this legacy utility directly.
 
-The project includes the NuGet.org v2 endpoint as a project-local fallback
-because these exact 1.8 packages are downloadable but are not currently visible
-through NuGet.org's v3 registration index.
+For default public restores, the project includes the NuGet.org v2 endpoint as a
+project-local fallback because these exact 1.8 packages may not be visible through
+NuGet.org's v3 registration index. Providing `-p:RestoreConfigFile=<config>` uses
+only the sources in that configuration.
 
 ## Build
 

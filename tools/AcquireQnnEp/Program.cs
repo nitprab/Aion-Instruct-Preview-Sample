@@ -11,7 +11,8 @@ internal static class Program
         CatalogFailure = 2,
         QnnNotFound = 3,
         EnsureReadyFailure = 4,
-        RegistrationFailure = 5,
+        // 5 was RegistrationFailure, retired: in-process registration is not something
+        // this tool's callers depend on. See the TryRegister note in AcquireQnnAsync.
     }
 
     public static async Task<int> Main(string[] args)
@@ -52,17 +53,29 @@ internal static class Program
         if (providers.Count == 0)
         {
             Console.Error.WriteLine(
-                "No execution providers were returned. Verify Windows App Runtime 1.8 " +
+                "No execution providers were returned. Verify the Windows ML runtime " +
                 "and the process privileges.");
             return ExitCode.QnnNotFound;
         }
 
+        // Prefer the highest-versioned QNN provider when a machine surfaces more than one.
+        // Snapdragon boxes can carry several packages publishing a QNN provider (for example
+        // ...QNN.EP.1.8 alongside ...QNN.EP.2), and the Aion Instruct model's shared-context
+        // groups only compile on the newer one: EP 2.2451.48 fails all six cacheable models
+        // where 2.2480.49 passes all six. ExecutionProvider exposes no version, so ordering
+        // falls back to the library path; when that is empty the first match wins, which
+        // matches the previous behaviour.
         ExecutionProvider? qnnProvider = null;
         foreach (ExecutionProvider provider in providers)
         {
             PrintProvider(provider);
-            if (qnnProvider is null &&
-                provider.Name.Contains("QNN", StringComparison.OrdinalIgnoreCase))
+            if (!provider.Name.Contains("QNN", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+            if (qnnProvider is null ||
+                string.CompareOrdinal(provider.LibraryPath ?? string.Empty,
+                                      qnnProvider.LibraryPath ?? string.Empty) > 0)
             {
                 qnnProvider = provider;
             }
@@ -88,19 +101,23 @@ internal static class Program
         }
 
         Console.WriteLine("QNN provider is ready.");
+
+        // EnsureReadyAsync above is the part that matters: it stages the provider package
+        // machine-wide, which is what this tool exists to do. TryRegister only registers the
+        // provider into THIS process's inference environment, and this process is about to
+        // exit -- and the Aion Instruct SDK performs its own provider registration against
+        // its own bundled ONNX Runtime when it loads. So a TryRegister failure here says
+        // nothing about whether the machine is provisioned; report it and still succeed.
         bool registered;
         using (new NativeStderrFilter())
         {
             registered = qnnProvider.TryRegister();
         }
 
-        if (!registered)
-        {
-            Console.Error.WriteLine("TryRegister failed for the QNN provider.");
-            return ExitCode.RegistrationFailure;
-        }
-
-        Console.WriteLine("QNN provider registered successfully for this process.");
+        Console.WriteLine(registered
+            ? "QNN provider registered successfully for this process."
+            : "QNN provider staged, but in-process registration was declined. This does not " +
+              "affect the SDK, which registers the provider itself.");
         return ExitCode.Success;
     }
 

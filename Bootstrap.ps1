@@ -2,18 +2,19 @@
 #
 # Picks up where 'git clone' leaves off:
 #   1. Verifies prereqs (PS arch, Developer Mode) and auto-installs the
-#      WAR 2 + WAR 1.8 runtimes via winget when they're missing.
-#   2. Downloads the latest signed Aion Instruct Preview release from GitHub if the
-#      framework MSIX is not already installed; installs it.
+#      WAR 2 runtime via winget when it's missing.
+#   2. Downloads the matching public framework and SDK NuGet from GitHub releases,
+#      or uses an explicitly supplied local artifact pair for release validation.
 #   3. Drops the SDK NuGet into ./nuget-local/.
-#   4. Acquires and registers the QNN execution provider on ARM64.
+#   4. On ARM64 the framework acquires catalog QNN during first model creation.
+#      The x64 framework includes Intel OpenVINO and AMD VitisAI.
 #   5. Builds and launches AionInstructPreview.Chat via 'dotnet run' (which
 #      registers the loose build-output layout as a development package).
 #
 # Re-running is idempotent: the framework at the matching version is detected
-# and skipped, and already-present runtimes are left as-is. Older framework
-# installs are NOT auto-removed -- the script prints exact recovery commands
-# and exits so you can decide whether to clean up.
+# and skipped, and already-present runtimes are left as-is. Older frameworks
+# are updated in place without removing dependent applications; downgrades and
+# ambiguous same-architecture registrations are rejected.
 #
 # Usage:
 #     .\Bootstrap.ps1
@@ -27,10 +28,31 @@
 
 [CmdletBinding()]
 param(
-    [switch]$SkipLaunch
+    [switch]$SkipLaunch,
+    [string]$NuGetConfig,
+    [string]$FrameworkMsixPath,
+    [string]$SdkNuGetPath
 )
 
 $ErrorActionPreference = 'Stop'
+$restoreArgs = @()
+$restoreDisplay = ''
+$configPath = $null
+if ($PSBoundParameters.ContainsKey('FrameworkMsixPath') -ne
+    $PSBoundParameters.ContainsKey('SdkNuGetPath')) {
+    throw 'Specify -FrameworkMsixPath and -SdkNuGetPath together.'
+}
+$useLocalAssets = $PSBoundParameters.ContainsKey('FrameworkMsixPath')
+if ($useLocalAssets) {
+    $FrameworkMsixPath = (Get-Item -LiteralPath $FrameworkMsixPath -ErrorAction Stop).FullName
+    $SdkNuGetPath = (Get-Item -LiteralPath $SdkNuGetPath -ErrorAction Stop).FullName
+}
+if ($PSBoundParameters.ContainsKey('NuGetConfig')) {
+    $configPath = (Get-Item -LiteralPath $NuGetConfig -ErrorAction Stop).FullName
+    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { throw 'NuGetConfig must be a file.' }
+    $restoreArgs = @("-p:RestoreConfigFile=$configPath")
+    $restoreDisplay = " `"-p:RestoreConfigFile=$configPath`""
+}
 [Net.ServicePointManager]::SecurityProtocol = `
     [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
@@ -40,8 +62,72 @@ $FrameworkPkgId  = 'Microsoft.AionInstructPreview.Framework.1.0'
 $ConsumerPkgId   = 'AionInstructPreviewChat'
 $ConsumerVersion = '1.0.0.0'
 $WarPkgId        = 'Microsoft.WindowsAppRuntime.2'
-$War18PkgId      = 'Microsoft.WindowsAppRuntime.1.8'
-$War18MinVersion = '8000.836.2153.0'
+
+function Assert-SdkNuGetCacheMatches {
+    param(
+        [string]$PackagePath,
+        [string]$Version,
+        [string]$ConfigFile,
+        [string]$ProjectDirectory = $PSScriptRoot
+    )
+
+    $settingsArgs = @()
+    if ($ConfigFile) { $settingsArgs += "-p:RestoreConfigFile=$ConfigFile" }
+    Push-Location $ProjectDirectory
+    try {
+        # Query NuGet's own settings resolution without restoring packages or building.
+        $location = & dotnet msbuild AionInstructPreview.Chat.csproj -nologo `
+            '-target:_GetRestoreProjectStyle;_GetRestoreSettings' `
+            -getProperty:_OutputPackagesPath @settingsArgs
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($location -join "`n"))) {
+            throw 'Could not resolve the sample project NuGet package cache.'
+        }
+        $cacheRoot = ($location -join "`n").Trim()
+        if (-not [IO.Path]::IsPathRooted($cacheRoot)) {
+            throw "NuGet returned an invalid package cache location: $cacheRoot"
+        }
+    } finally {
+        Pop-Location
+    }
+    $cached = Join-Path $cacheRoot (
+        "aioninstructpreview.text.framework\$Version\aioninstructpreview.text.framework.$Version.nupkg")
+    if ((Test-Path -LiteralPath $cached -PathType Leaf) -and
+        (Get-FileHash -LiteralPath $cached -Algorithm SHA256).Hash -ne
+        (Get-FileHash -LiteralPath $PackagePath -Algorithm SHA256).Hash) {
+        throw "The NuGet cache contains a different Aion SDK $Version at '$cached'. " +
+            'NuGet treats package versions as immutable and would restore the stale contract. ' +
+            'Use a new SDK package version, or set NUGET_PACKAGES to an existing empty directory ' +
+            'for this validation and rerun Bootstrap.ps1.'
+    }
+}
+
+function Assert-LocalFrameworkMatches {
+    param([string]$MsixPath, [string]$InstallLocation)
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($MsixPath)
+    try {
+        $entry = $archive.GetEntry('AppxBlockMap.xml')
+        $installedBlockMap = Join-Path $InstallLocation 'AppxBlockMap.xml'
+        if (-not $entry -or -not (Test-Path -LiteralPath $installedBlockMap -PathType Leaf)) {
+            throw 'Cannot verify local framework identity: a package block map is missing.'
+        }
+        $stream = $entry.Open()
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try {
+            $suppliedHash = [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '')
+        } finally {
+            $stream.Dispose()
+            $sha.Dispose()
+        }
+        if ($suppliedHash -ne (Get-FileHash -LiteralPath $installedBlockMap -Algorithm SHA256).Hash) {
+            throw 'The installed framework has the same version but different contents from the supplied MSIX. ' +
+                'Build the SDK with a new framework version and rerun bootstrap. No installed apps were removed.'
+        }
+    } finally {
+        $archive.Dispose()
+    }
+}
 
 function Write-Step  { param([string]$Msg) Write-Host "[bootstrap] $Msg" -ForegroundColor Cyan }
 function Write-OK    { param([string]$Msg) Write-Host "[bootstrap] $Msg" -ForegroundColor Green }
@@ -134,23 +220,15 @@ if ($nativeArch) {
 
 $arch = switch ($rawArch) {
     'ARM64' { 'ARM64' }
+    'AMD64' { 'x64' }
     default { $null }
-}
-if ($rawArch -eq 'AMD64') {
-    Stop-WithRecovery `
-        -Title 'x64 (Intel/AMD) support is coming soon.' `
-        -Recovery @(
-            'This preview of Aion Instruct Preview supports ARM64 Copilot+ PCs (Snapdragon, QNN NPU) only.',
-            'x64 (Intel/AMD) support is coming soon — check the releases page for updates.',
-            'Run Bootstrap.ps1 on an ARM64 Snapdragon Copilot+ PC to try the preview today.'
-        )
 }
 if (-not $arch) {
     Stop-WithRecovery `
         -Title "Unsupported processor architecture=$rawArch (process arch $emulatedArch, native arch '$nativeArch')" `
         -Recovery @(
-            'AionInstructPreview.Chat ships an ARM64 build only in this preview.',
-            'Launch a 64-bit PowerShell on an ARM64 Snapdragon Copilot+ PC and re-run.'
+            'AionInstructPreview.Chat ships ARM64 and x64 builds.',
+            'Launch a 64-bit PowerShell on an ARM64 (Snapdragon) or x64 (Intel/AMD) Copilot+ PC and re-run.'
         )
 }
 Write-Step "Architecture: $arch"
@@ -158,11 +236,7 @@ Write-Step "Architecture: $arch"
 # --- 2. WAR 2 runtime check -------------------------------------------------
 Ensure-Runtime -Label 'WAR 2' -PkgId $WarPkgId -WingetId 'Microsoft.WindowsAppRuntime.2.0' -Arch $arch
 
-# --- 2a. WAR 1.8 runtime check ----------------------------------------------
-# The on-device model runs on the WinML stack from Windows App Runtime 1.8.
-Ensure-Runtime -Label 'WAR 1.8' -PkgId $War18PkgId -WingetId 'Microsoft.WindowsAppRuntime.1.8' -Arch $arch -MinVersion $War18MinVersion
-
-# --- 2b. Developer Mode check -----------------------------------------------
+# --- 2a. Developer Mode check -----------------------------------------------
 # dotnet run registers the loose build-output layout as a development package,
 # which requires Developer Mode.
 $devModeKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock'
@@ -234,29 +308,61 @@ $ghHeaders = @{
 }
 $latestUrl = "https://api.github.com/repos/$RepoOwner/$RepoName/releases/latest"
 
-Write-Step "Discovering latest release from $latestUrl ..."
-try {
-    $release = Invoke-RestMethod -Uri $latestUrl -Headers $ghHeaders -ErrorAction Stop
-} catch {
+$release = $null
+if ($useLocalAssets) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($FrameworkMsixPath)
+    try {
+        $entry = $archive.GetEntry('AppxManifest.xml')
+        if (-not $entry) { throw 'The local framework MSIX has no AppxManifest.xml.' }
+        $reader = [IO.StreamReader]::new($entry.Open())
+        try { $manifest = [xml]$reader.ReadToEnd() } finally { $reader.Dispose() }
+        if ($manifest.Package.Identity.Name -ne $FrameworkPkgId -or
+            $manifest.Package.Identity.ProcessorArchitecture -ine $arch) {
+            throw "The local MSIX is not the Aion $arch framework."
+        }
+        $targetFwVersion = $manifest.Package.Identity.Version
+        if ($arch -eq 'x64' -and -not $archive.GetEntry('EmbeddedExecutionProviders.txt')) {
+            throw 'The x64 MSIX does not contain the embedded Intel/AMD providers.'
+        }
+    } finally {
+        $archive.Dispose()
+    }
+    $tag = "v$targetFwVersion"
+    Write-OK "Using local $arch framework v$targetFwVersion"
+} else {
+    Write-Step "Discovering latest release from $latestUrl ..."
+    try {
+        $release = Invoke-RestMethod -Uri $latestUrl -Headers $ghHeaders -ErrorAction Stop
+    } catch {
+        Stop-WithRecovery `
+            -Title "Could not query the latest release ($($_.Exception.Message))" `
+            -Recovery @(
+                "Visit https://github.com/$RepoOwner/$RepoName/releases in a browser to confirm a release exists.",
+                'Check your internet connection / proxy, then re-run.'
+            )
+    }
+    if (-not $release -or -not $release.tag_name) {
+        Stop-WithRecovery `
+            -Title 'No published release found' `
+            -Recovery @(
+                "Visit https://github.com/$RepoOwner/$RepoName/releases in a browser to confirm a release exists.",
+                'If the page is empty, the SDK pipeline has not published a release yet.'
+            )
+    }
+    $tag = $release.tag_name
+    $targetFwVersion = $tag -replace '^v', ''
+    Write-OK "Latest release: $tag ($($release.name))"
+}
+if ([version]$targetFwVersion -lt [version]'1.0.0.2') {
     Stop-WithRecovery `
-        -Title "Could not query the latest release ($($_.Exception.Message))" `
+        -Title "Release $tag predates this sample's API contract (framework 1.0.0.2 / SDK 1.0.1)" `
         -Recovery @(
-            "Visit https://github.com/$RepoOwner/$RepoName/releases in a browser to confirm a release exists.",
-            'Check your internet connection / proxy, then re-run.'
+            'Use a release containing framework 1.0.0.2 or newer and SDK NuGet 1.0.1.',
+            'For local development, build/install the matching SDK and launch the sample manually.'
         )
 }
-if (-not $release -or -not $release.tag_name) {
-    Stop-WithRecovery `
-        -Title 'No published release found' `
-        -Recovery @(
-            "Visit https://github.com/$RepoOwner/$RepoName/releases in a browser to confirm a release exists.",
-            'If the page is empty, the SDK pipeline has not published a release yet.'
-        )
-}
-$tag = $release.tag_name
-$targetFwVersion = $tag -replace '^v', ''
-$assets = @($release.assets)
-Write-OK "Latest release: $tag ($($release.name))"
+$assets = if ($release) { @($release.assets) } else { @() }
 
 # Resolve a release asset's download URL by exact file name. Returns the
 # browser_download_url (a plain HTTPS link served without auth on a public repo).
@@ -276,45 +382,68 @@ function Get-AssetUrl {
 
 # Asset names follow a fixed pattern: AionInstructPreview.LanguageModel.Framework_<ver>_<arch>.msix
 # and AionInstructPreview.Text.Framework.<nupkgVer>.nupkg.
-# The MSIX uses the 4-part package version (e.g. 1.0.0.0); the NuGet asset uses the
-# 3-part SemVer (e.g. 1.0.0). Derive the 3-part version for the nupkg name.
+# The contract NuGet is pinned independently of the framework release version.
 $expectedMsixName = "AionInstructPreview.LanguageModel.Framework_${targetFwVersion}_${arch}.msix"
-$nupkgVersion = ($targetFwVersion -split '\.')[0..2] -join '.'
+[xml]$sampleProject = Get-Content (Join-Path $PSScriptRoot 'AionInstructPreview.Chat.csproj') -Raw
+$nupkgVersion = ($sampleProject.Project.ItemGroup.PackageReference |
+    Where-Object { $_.Include -eq 'AionInstructPreview.Text.Framework' }).Version
 $expectedNupkgName = "AionInstructPreview.Text.Framework.${nupkgVersion}.nupkg"
+if ($useLocalAssets -and (Split-Path $SdkNuGetPath -Leaf) -ne $expectedNupkgName) {
+    throw "Expected local SDK NuGet $expectedNupkgName, got $(Split-Path $SdkNuGetPath -Leaf)."
+}
 
 # --- 4. Framework MSIX state -----------------------------------------------
 $fw = Get-AppxPackage -Name $FrameworkPkgId -ErrorAction SilentlyContinue |
       Where-Object { $_.Architecture -eq $arch }
+if (@($fw).Count -gt 1) {
+    Stop-WithRecovery -Title "Multiple $arch Aion frameworks are installed" -Recovery @(
+        'Inspect installed frameworks and resolve the ambiguity before installing another package.'
+    )
+}
+if ($fw -and [version]$fw.Version -gt [version]$targetFwVersion) {
+    Stop-WithRecovery -Title "Installed framework $($fw.Version) is newer than $targetFwVersion" -Recovery @(
+        'Use an SDK release at least as new as the installed framework; downgrade is not automatic.'
+    )
+}
 if ($fw -and $fw.Version -eq $targetFwVersion) {
+    if ($useLocalAssets) {
+        Assert-LocalFrameworkMatches -MsixPath $FrameworkMsixPath -InstallLocation $fw.InstallLocation
+    }
+    if ($arch -eq 'x64' -and
+        -not (Test-Path (Join-Path $fw.InstallLocation 'EmbeddedExecutionProviders.txt'))) {
+        throw 'The installed x64 framework lacks the embedded Intel/AMD payload. Install a compatible SDK release.'
+    }
     Write-Skip "Aion Instruct Preview framework MSIX already installed at v$($fw.Version) -- skipping download/install"
-} elseif ($fw) {
-    Stop-WithRecovery `
-        -Title "Aion Instruct Preview framework already installed at v$($fw.Version); release ships v$targetFwVersion" `
-        -Recovery @(
-            '# Uninstall any dependent test packages first if needed, then:',
-            "    Get-AppxPackage -Name $FrameworkPkgId | Remove-AppxPackage",
-            '# If that errors with HRESULT 0x80073CF3, a sibling package depends on the framework.',
-            "    Get-AppxPackage | Where-Object { `$_.Dependencies.Name -contains '$FrameworkPkgId' } |",
-            '        ForEach-Object { Remove-AppxPackage -Package $_.PackageFullName }'
-        )
 } else {
-    $stage = Join-Path $env:TEMP "Aion Instruct Preview-bootstrap-$tag"
-    if (-not (Test-Path $stage)) { New-Item -ItemType Directory -Path $stage | Out-Null }
-    Write-Step "Downloading $expectedMsixName (~1.3 GB; this is the slow step, please wait) ..."
-    $msixPath = Join-Path $stage $expectedMsixName
-    $msixUrl = Get-AssetUrl -Name $expectedMsixName
-    try {
-        Invoke-WebRequest -Uri $msixUrl -Headers $ghHeaders -OutFile $msixPath -ErrorAction Stop
-    } catch {
-        Stop-WithRecovery `
-            -Title "Download failed for $expectedMsixName ($($_.Exception.Message))" `
-            -Recovery @(
-                "Visit https://github.com/$RepoOwner/$RepoName/releases/tag/$tag and check the asset list.",
-                "Expected asset name: $expectedMsixName"
-            )
+    $msixPath = $FrameworkMsixPath
+    if (-not $useLocalAssets) {
+        $stage = Join-Path $env:TEMP "Aion Instruct Preview-bootstrap-$tag"
+        if (-not (Test-Path $stage)) { New-Item -ItemType Directory -Path $stage | Out-Null }
+        Write-Step "Downloading $expectedMsixName (several GB; this may take a while) ..."
+        $msixPath = Join-Path $stage $expectedMsixName
+        $msixUrl = Get-AssetUrl -Name $expectedMsixName
+        try {
+            Invoke-WebRequest -Uri $msixUrl -Headers $ghHeaders -OutFile $msixPath -ErrorAction Stop
+        } catch {
+            Stop-WithRecovery `
+                -Title "Download failed for $expectedMsixName ($($_.Exception.Message))" `
+                -Recovery @(
+                    "Visit https://github.com/$RepoOwner/$RepoName/releases/tag/$tag and check the asset list.",
+                    "Expected asset name: $expectedMsixName"
+                )
+        }
+        if ($arch -eq 'x64') {
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $archive = [IO.Compression.ZipFile]::OpenRead($msixPath)
+            try {
+                if (-not $archive.GetEntry('EmbeddedExecutionProviders.txt')) {
+                    throw 'The latest x64 release does not contain embedded Intel/AMD providers.'
+                }
+            } finally { $archive.Dispose() }
+        }
     }
     Write-Step "Installing framework MSIX ..."
-    Add-AppxPackage -Path $msixPath
+    Add-AppxPackage -Path $msixPath -ForceUpdateFromAnyVersion
     $fw = Get-AppxPackage -Name $FrameworkPkgId -ErrorAction SilentlyContinue |
           Where-Object { $_.Architecture -eq $arch }
     if (-not $fw) {
@@ -333,7 +462,13 @@ if ($fw -and $fw.Version -eq $targetFwVersion) {
 $nugetLocal = Join-Path $PSScriptRoot 'nuget-local'
 $expectedNupkg = Join-Path $nugetLocal $expectedNupkgName
 if (Test-Path $expectedNupkg) {
-    Write-Skip "$expectedNupkgName already in nuget-local/ -- skipping download"
+    if (-not $useLocalAssets -or
+        (Get-FileHash $expectedNupkg).Hash -eq (Get-FileHash $SdkNuGetPath).Hash) {
+        Write-Skip "$expectedNupkgName already in nuget-local/ -- skipping download"
+    } else {
+        Copy-Item -LiteralPath $SdkNuGetPath -Destination $expectedNupkg -Force
+        Write-OK "Updated $expectedNupkgName from the local SDK build"
+    }
 } else {
     # Wipe stale older-version nupkgs so NuGet restore picks the new one cleanly.
     Get-ChildItem $nugetLocal -Filter 'AionInstructPreview.Text.Framework*.nupkg' -ErrorAction SilentlyContinue |
@@ -341,47 +476,37 @@ if (Test-Path $expectedNupkg) {
             Write-Skip "Removing stale $($_.Name) from nuget-local/"
             Remove-Item $_.FullName -Force
         }
-    Write-Step "Downloading $expectedNupkgName ..."
-    $nupkgUrl = Get-AssetUrl -Name $expectedNupkgName
-    try {
-        Invoke-WebRequest -Uri $nupkgUrl -Headers $ghHeaders -OutFile (Join-Path $nugetLocal $expectedNupkgName) -ErrorAction Stop
-    } catch {
-        Stop-WithRecovery `
-            -Title "Download failed for $expectedNupkgName ($($_.Exception.Message))" `
-            -Recovery @(
-                "Visit https://github.com/$RepoOwner/$RepoName/releases/tag/$tag and check the asset list.",
-                "Expected asset name: $expectedNupkgName"
-            )
+    if ($useLocalAssets) {
+        Copy-Item -LiteralPath $SdkNuGetPath -Destination $expectedNupkg
+    } else {
+        Write-Step "Downloading $expectedNupkgName ..."
+        $nupkgUrl = Get-AssetUrl -Name $expectedNupkgName
+        try {
+            Invoke-WebRequest -Uri $nupkgUrl -Headers $ghHeaders -OutFile $expectedNupkg -ErrorAction Stop
+        } catch {
+            Stop-WithRecovery `
+                -Title "Download failed for $expectedNupkgName ($($_.Exception.Message))" `
+                -Recovery @(
+                    "Visit https://github.com/$RepoOwner/$RepoName/releases/tag/$tag and check the asset list.",
+                    "Expected asset name: $expectedNupkgName"
+                )
+        }
     }
     Write-OK "Dropped $expectedNupkgName in nuget-local/"
 }
+Assert-SdkNuGetCacheMatches -PackagePath $expectedNupkg -Version $nupkgVersion -ConfigFile $configPath
 
-# --- 5a. Acquire QNN execution provider (if needed) ------------------------
-# Keep this explicitly ARM64-gated so future x64 support does not attempt to
-# acquire Qualcomm's QNN provider.
+# --- 5a. Execution-provider provisioning -----------------------------------
+# The framework uses its bundled WinML catalog to acquire QNN EP 2 during
+# first model creation. The x64 framework already embeds Intel OpenVINO and AMD VitisAI.
 if ($arch -eq 'ARM64') {
-    $qnnPackages = @(Get-AppxPackage -Name 'MicrosoftCorporationII.WinML.Qualcomm.QNN.EP.1.8*' -ErrorAction SilentlyContinue |
-        Where-Object { $_.Architecture -eq $arch })
+    $qnnPackages = @(Get-AppxPackage -Name '*WinML.Qualcomm.QNN.EP*.2*' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Architecture -eq $arch -and [version]$_.Version -ge [version]'2.2480.49.0' })
     if ($qnnPackages.Count -eq 0) {
-        $acquireQnnProject = Join-Path $PSScriptRoot 'tools\AcquireQnnEp\AcquireQnnEp.csproj'
-        Write-Step 'Preparing the QNN execution provider (this may download components) ...'
-        & dotnet run --project "$acquireQnnProject" -c Release -p:Platform=$arch | Out-Host
-        $acquireQnnExitCode = $LASTEXITCODE
-        if ($acquireQnnExitCode -ne 0) {
-            Stop-WithRecovery `
-                -Title "QNN execution provider acquisition failed (exit code $acquireQnnExitCode)" `
-                -Recovery @(
-                    'Re-run the acquisition tool directly for full output:',
-                    "    dotnet run --project `"$acquireQnnProject`" -c Release -p:Platform=$arch",
-                    "Verify Windows App Runtime 1.8 v$War18MinVersion or newer is installed:",
-                    "    Get-AppxPackage -Name $War18PkgId",
-                    'Check internet access and install the latest Snapdragon NPU/QNN drivers.'
-                )
-        }
-        Write-OK 'QNN execution provider is ready'
+        Write-Step 'QNN EP 2 will be acquired by the framework when the model first loads (network access may be required).'
+    } else {
+        Write-OK 'Compatible QNN EP 2 is already installed'
     }
-} else {
-    Write-Skip "QNN execution provider acquisition skipped for $arch"
 }
 
 # --- 6. Build, register (loose layout) and launch via dotnet run ------------
@@ -392,7 +517,7 @@ if ($SkipLaunch) {
     Write-Host ''
     Write-OK 'Bootstrap complete (skipped chat app build/launch).'
     Write-Host 'Build and run manually:' -ForegroundColor Cyan
-    Write-Host "    dotnet run --project `"$csproj`" --launch-profile `"AionInstructPreview.Chat`" -c Release -p:Platform=$arch" -ForegroundColor Cyan
+    Write-Host "    dotnet run --project `"$csproj`" --launch-profile `"AionInstructPreview.Chat`" -c Release -p:Platform=$arch$restoreDisplay" -ForegroundColor Cyan
     return
 }
 
@@ -404,13 +529,13 @@ if ($existing) {
 }
 
 Write-Step "Building and launching AionInstructPreview.Chat ($arch, Release) via dotnet run ..."
-& dotnet run --project "$csproj" --launch-profile "AionInstructPreview.Chat" -c Release -p:Platform=$arch | Out-Host
+& dotnet run --project "$csproj" --launch-profile "AionInstructPreview.Chat" -c Release -p:Platform=$arch @restoreArgs | Out-Host
 if ($LASTEXITCODE -ne 0) {
     Stop-WithRecovery `
         -Title 'dotnet run failed' `
         -Recovery @(
             'Re-run directly for full output:',
-            "    dotnet run --project `"$csproj`" --launch-profile `"AionInstructPreview.Chat`" -c Release -p:Platform=$arch",
+            "    dotnet run --project `"$csproj`" --launch-profile `"AionInstructPreview.Chat`" -c Release -p:Platform=$arch$restoreDisplay",
             'Most likely causes:',
             '  - Developer Mode is off (Settings -> Privacy & security -> For developers).',
             '  - The .NET 9 SDK is not installed (run: dotnet --info to confirm).',
@@ -422,5 +547,5 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host ''
 Write-OK 'Bootstrap complete. Aion Instruct Preview Chat is loading.'
-Write-Host 'First launch on a cold cache takes ~3-5 min for the NPU model compile.' -ForegroundColor DarkGray
+Write-Host 'First launch on a cold cache can take several minutes for NPU compilation.' -ForegroundColor DarkGray
 Write-Host 'Stuck longer than that? Run: .\scripts\Diagnose-AionInstructPreview.ps1' -ForegroundColor DarkGray

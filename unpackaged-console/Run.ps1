@@ -14,33 +14,35 @@
 param(
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]] $Prompt,
-    [string] $CaptureLog
+    [string] $CaptureLog,
+    [string] $NuGetConfig
 )
 
 $ErrorActionPreference = "Stop"
 $here = $PSScriptRoot
+$restoreArgs = @()
+if ($PSBoundParameters.ContainsKey('NuGetConfig')) {
+    $configPath = (Get-Item -LiteralPath $NuGetConfig -ErrorAction Stop).FullName
+    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { throw 'NuGetConfig must be a file.' }
+    $restoreArgs = @("-p:RestoreConfigFile=$configPath")
+}
 
 Write-Host "Checking for the installed Aion Instruct Preview framework package..."
 $pkg = Get-AppxPackage "Microsoft.AionInstructPreview.Framework*" |
     Sort-Object Version -Descending |
     Select-Object -First 1
 
-if ($null -eq $pkg) {
-    Write-Error "Aion Instruct Preview framework package not installed. Install the framework MSIX first (see the repo root README), then re-run."
+if ($null -eq $pkg -or [version]$pkg.Version -lt [version]'1.0.0.2') {
+    Write-Error "Install or upgrade Aion Instruct Preview framework to 1.0.0.2 or newer (see the repo root README), then re-run."
     exit 1
 }
 
 Write-Host ("Using framework {0} {1} ({2})." -f $pkg.Name, $pkg.Version, $pkg.Architecture)
 
-# The model stack needs both Windows App Runtimes at run time.
-foreach ($war in @(
-    @{ Name = 'Microsoft.WindowsAppRuntime.2*';   Label = 'Windows App Runtime 2';   Id = 'Microsoft.WindowsAppRuntime.2.0' },
-    @{ Name = 'Microsoft.WindowsAppRuntime.1.8*'; Label = 'Windows App Runtime 1.8'; Id = 'Microsoft.WindowsAppRuntime.1.8' }
-)) {
-    if (-not (Get-AppxPackage $war.Name)) {
-        Write-Error ("{0} is not installed. Install it with:`n    winget install --id {1}`nthen re-run." -f $war.Label, $war.Id)
-        exit 1
-    }
+# Inference uses bundled WinML/ORT; WAR 2 supplies the remaining Windows App SDK types.
+if (-not (Get-AppxPackage 'Microsoft.WindowsAppRuntime.2*')) {
+    Write-Error "Windows App Runtime 2 is not installed. Run: winget install --id Microsoft.WindowsAppRuntime.2.0"
+    exit 1
 }
 
 $nugetLocal = Join-Path (Split-Path $here -Parent) "nuget-local"
@@ -53,16 +55,18 @@ if (-not $sdkNupkg) {
 $csproj = Join-Path $here "AionInstructPreview.Chat.Console.csproj"
 
 # Build first so build output never pollutes the captured run.
-dotnet build $csproj -c Release | Out-Host
-
-# Run the built executable directly so captured output contains only the sample app.
-$exe = Get-ChildItem -Path (Join-Path $here "bin\Release") -Filter "AionInstructPreview.Chat.Console.exe" -Recurse |
-    Sort-Object LastWriteTime -Descending |
-    Select-Object -First 1
-if (-not $exe) {
-    Write-Error "Build succeeded but AionInstructPreview.Chat.Console.exe was not found under bin\Release."
-    exit 1
+dotnet build $csproj -c Release @restoreArgs | Out-Host
+if ($LASTEXITCODE -ne 0) {
+    throw "Console sample build failed (exit $LASTEXITCODE); no executable was launched."
 }
+
+# Resolve this build's output rather than selecting a stale or wrong-architecture executable.
+$targetPath = & dotnet msbuild $csproj -nologo -p:Configuration=Release -getProperty:TargetPath @restoreArgs
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($targetPath)) {
+    throw "Could not resolve the console sample build output (exit $LASTEXITCODE)."
+}
+$exePath = [IO.Path]::ChangeExtension($targetPath.Trim(), '.exe')
+$exe = Get-Item -LiteralPath $exePath -ErrorAction Stop
 
 $argList = @()
 if ($Prompt) { $argList = $Prompt }

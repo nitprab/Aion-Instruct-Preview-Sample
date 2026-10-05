@@ -48,11 +48,11 @@ internal static class FrameworkDependency
             ? ArchArm64
             : ArchX64;
 
-        // minVersion 0 means "any installed version of this family".
+        // This contract requires framework 1.0.0.2.
         int hr = TryCreatePackageDependency(
             IntPtr.Zero,
             FamilyName,
-            minVersion: 0UL,
+            minVersion: (1UL << 48) | 2UL,
             arch,
             LifetimeKindProcess,
             lifetimeArtifact: null,
@@ -62,7 +62,7 @@ internal static class FrameworkDependency
         {
             throw new InvalidOperationException(
                 $"TryCreatePackageDependency({FamilyName}) failed (HRESULT 0x{hr:X8}). " +
-                "Is the Aion Instruct Preview framework package installed? Run.ps1 checks this.",
+                "Install Aion Instruct Preview framework 1.0.0.2 or newer. Run.ps1 checks this.",
                 Marshal.GetExceptionForHR(hr));
         }
 

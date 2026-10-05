@@ -18,8 +18,8 @@
     <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
     <WindowsAppSdkBootstrapInitialize>false</WindowsAppSdkBootstrapInitialize>
 
-    <!-- The exact 1.8 packages are downloadable but are not yet visible in NuGet's v3 registration index. -->
-    <RestoreAdditionalProjectSources>$(RestoreAdditionalProjectSources);https://www.nuget.org/api/v2/</RestoreAdditionalProjectSources>
+    <!-- The v2 fallback is for default public restores only; honor an explicit restore config. -->
+    <RestoreAdditionalProjectSources Condition="'$(RestoreConfigFile)' == ''">$(RestoreAdditionalProjectSources);https://www.nuget.org/api/v2/</RestoreAdditionalProjectSources>
 
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
