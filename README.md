@@ -111,8 +111,7 @@ Developer Mode.
   (or grab the installer from <https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads>.) This runtime is needed only to **run**, not to build.
 - **Inference runtime:** WinML and ORT are bundled in the Aion framework, which acquires
   the compatible catalog EP during model initialization if needed. The sample does not need
-  Windows App Runtime 1.8. An optional legacy QNN acquisition utility uses Runtime 1.8,
-  but it is not part of the quickstart.
+  Windows App Runtime 1.8.
 - **.NET 9 Desktop Runtime** (`winget install --id Microsoft.DotNet.DesktopRuntime.9`, or the `windowsdesktop-runtime-9.0.x-win-<arch>.exe` installer). The .NET 9 SDK above already includes this, so you only need it separately on a run-only machine that has no SDK.
 - The Aion Instruct Preview **framework MSIX** installed for your arch — `Bootstrap.ps1` handles this (see [Quickstart](#quickstart)).
 
