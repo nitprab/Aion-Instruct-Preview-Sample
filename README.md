@@ -321,7 +321,7 @@ With the feed and both [required PackageReferences](#required-packagereferences)
 | Surface | What it does |
 |---|---|
 | `AionInstructPreview.Text.Framework.props` (auto-imported) | Adds `AionInstructPreview.Text.winmd` to `$(CsWinRTInputs)`. CsWinRT projects the runtimeclasses into C# at build time. |
-| `AionInstructPreview.Text.Framework.targets` (auto-imported) | Before pack, injects the framework dependency with `MinVersion="1.0.0.2"` or raises an older minimum. Publisher defaults to the Microsoft Corporation subject used by the signed framework. Override `<AionInstructPreviewFrameworkPublisher>` only for a differently signed framework. |
+| `AionInstructPreview.Text.Framework.targets` (auto-imported) | Before pack, injects the framework dependency with `MinVersion="1.0.0.3"` or raises an older minimum. Publisher defaults to the Microsoft Corporation subject used by the signed framework. Override `<AionInstructPreviewFrameworkPublisher>` only for a differently signed framework. |
 
 At runtime, Windows AppX resolves the framework dependency, loads `AionInstructPreview.Text.dll` out of the framework's deploy folder, and cross-package WinRT activation hands you the runtimeclasses.
 
@@ -381,7 +381,7 @@ int arch = RuntimeInformation.ProcessArchitecture == Architecture.Arm64
 TryCreatePackageDependency(
     /* user            */ IntPtr.Zero,
     /* packageFamily   */ "Microsoft.AionInstructPreview.Framework.1.0_8wekyb3d8bbwe",
-    /* minVersion      */ (1UL << 48) | 2UL, // 1.0.0.2
+    /* minVersion      */ (1UL << 48) | 3UL, // 1.0.0.3
     /* architectures   */ arch,
     /* lifetimeKind    */ 0,       // Process
     /* lifetimeArtifact*/ null,
@@ -461,7 +461,7 @@ Preview-only diagnostics have been removed: results no longer expose `TokenCount
 `TimeToFirstToken`, or `DecodeDuration`, and the model no longer exposes `GetTokenCount`,
 `MaxPromptTokenCount`, or `ContextLength`. Measure app-observed timing locally instead; callback
 counts are progress updates, not exact token counts. Rebuild consumers with NuGet **1.0.1** and run
-against framework **1.0.0.2**. This is a breaking preview contract change; compatibility with
+against framework **1.0.0.3**. This is a breaking preview contract change; compatibility with
 previously built consumer binaries is not promised.
 
 Cross-link the WinAppSDK reference for full member docs:

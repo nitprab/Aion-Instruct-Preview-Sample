@@ -138,7 +138,7 @@ LanguageModelResponseResult result = await op;
   `ContentFilterOptions` is constructed by default and enables moderation in the moderation
   follow-up. That follow-up requires matching rebuilt SDK metadata and runtime; do not infer
   moderation support from the previously published package versions or invent a release version.
-  Rebuild consumers with NuGet **1.0.1** and framework **1.0.0.2**; this breaking preview contract
+  Rebuild consumers with NuGet **1.0.1** and framework **1.0.0.3**; this breaking preview contract
   change does not promise compatibility with previously built consumer binaries.
 - **No preview-only diagnostics:** results expose `Text` and `Status`, not `TokenCount`,
   `TimeToFirstToken`, or `DecodeDuration`. The model no longer exposes `GetTokenCount`,

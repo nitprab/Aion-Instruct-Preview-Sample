@@ -104,7 +104,7 @@ try {
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
   <Identity Name="AionInstructPreview.LanguageModel.Framework"
             Publisher="CN=Microsoft Corporation"
-            Version="1.0.0.2"
+            Version="1.0.0.3"
             ProcessorArchitecture="x64" />
 </Package>
 '@)
@@ -112,18 +112,18 @@ try {
     [IO.Compression.ZipFile]::CreateFromDirectory($layout, $msix)
     $script:FrameworkPkgId = 'AionInstructPreview.LanguageModel.Framework'
     $identity = Assert-FrameworkMsixIdentity -MsixPath $msix `
-        -ExpectedArchitecture x64 -ExpectedVersion ([version]'1.0.0.2')
-    if ($identity.Version -ne [version]'1.0.0.2') {
+        -ExpectedArchitecture x64 -ExpectedVersion ([version]'1.0.0.3')
+    if ($identity.Version -ne [version]'1.0.0.3') {
         throw 'Framework identity validation returned the wrong version.'
     }
     Assert-Rejected {
         Assert-FrameworkMsixIdentity -MsixPath $msix `
-            -ExpectedArchitecture ARM64 -ExpectedVersion ([version]'1.0.0.2')
+            -ExpectedArchitecture ARM64 -ExpectedVersion ([version]'1.0.0.3')
     } 'is not the Aion ARM64 framework'
     Assert-Rejected {
         Assert-FrameworkMsixIdentity -MsixPath $msix `
-            -ExpectedArchitecture x64 -ExpectedVersion ([version]'1.0.0.3')
-    } 'expected 1.0.0.3'
+            -ExpectedArchitecture x64 -ExpectedVersion ([version]'1.0.0.4')
+    } 'expected 1.0.0.4'
 
     Assert-Rejected { Assert-LocalFrameworkMatches $msix $installed } 'block map is missing'
     Copy-Item $blockMap $installed

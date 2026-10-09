@@ -61,13 +61,14 @@ function Test-Launcher {
 
 foreach ($relative in @('unpackaged-console\Run.ps1', 'unpackaged-wpf\Run.ps1')) {
     $path = Join-Path $root $relative
-    Test-Launcher -Path $path -HasWar2 $true -FrameworkVersion '1.0.0.2' -ExpectBuild $true
-    Test-Launcher -Path $path -HasWar2 $false -FrameworkVersion '1.0.0.2' -ExpectBuild $false
+    Test-Launcher -Path $path -HasWar2 $true -FrameworkVersion '1.0.0.3' -ExpectBuild $true
+    Test-Launcher -Path $path -HasWar2 $false -FrameworkVersion '1.0.0.3' -ExpectBuild $false
+    Test-Launcher -Path $path -HasWar2 $true -FrameworkVersion '1.0.0.2' -ExpectBuild $false
     Test-Launcher -Path $path -HasWar2 $true -FrameworkVersion '1.0.0.1' -ExpectBuild $false
     Test-Launcher -Path $path -HasWar2 $true -FrameworkVersion '1.0.0.0' -ExpectBuild $false
-    Test-Launcher -Path $path -HasWar2 $true -FrameworkVersion '1.0.0.2' -ExpectBuild $false `
+    Test-Launcher -Path $path -HasWar2 $true -FrameworkVersion '1.0.0.3' -ExpectBuild $false `
         -WarArchitecture 'x64'
-    Test-Launcher -Path $path -HasWar2 $true -FrameworkVersion '1.0.0.2' -ExpectBuild $true `
+    Test-Launcher -Path $path -HasWar2 $true -FrameworkVersion '1.0.0.3' -ExpectBuild $true `
         -NuGetConfig (Join-Path $root 'nuget.config')
 }
 foreach ($relative in @('Bootstrap.ps1', 'unpackaged-console\Run.ps1', 'unpackaged-wpf\Run.ps1')) {
@@ -86,4 +87,4 @@ foreach ($parameter in @('FrameworkMsixPath', 'SdkNuGetPath')) {
     }
     if (-not $rejected) { throw "Bootstrap did not reject lone -$parameter before setup." }
 }
-Write-Output 'PASS: 12 launcher scenarios and 5 missing-input checks; no packages or apps changed.'
+Write-Output 'PASS: 14 launcher scenarios and 5 missing-input checks; no packages or apps changed.'

@@ -472,11 +472,11 @@ if ($useLocalAssets) {
     Write-Host '    https://github.com/microsoft/Aion-Instruct-Preview-Sample/blob/main/docs/Aion-Instruct-Preview-Pre-Release-EULA.docx' -ForegroundColor Yellow
     Write-Host 'Review these terms before downloading or using the pre-release validation package.' -ForegroundColor Yellow
 }
-if ([version]$targetFwVersion -lt [version]'1.0.0.2') {
+if ([version]$targetFwVersion -lt [version]'1.0.0.3') {
     Stop-WithRecovery `
-        -Title "Release $tag predates this sample's API contract (framework 1.0.0.2 / SDK 1.0.1)" `
+        -Title "Release $tag predates this sample's required catalog framework (framework 1.0.0.3 / SDK 1.0.1)" `
         -Recovery @(
-            'Use a release containing framework 1.0.0.2 or newer and SDK NuGet 1.0.1.',
+            'Use a release containing framework 1.0.0.3 or newer and SDK NuGet 1.0.1 from the same build.',
             'For local development, build/install the matching SDK and launch the sample manually.'
         )
 }
