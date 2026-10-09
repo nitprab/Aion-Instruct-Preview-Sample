@@ -15,7 +15,7 @@ if ($errors.Count) { throw 'Bootstrap.ps1 contains syntax errors.' }
 foreach ($name in @('Assert-SdkNuGetCacheMatches', 'Assert-LocalFrameworkMatches',
         'Assert-FrameworkMsixIdentity', 'Get-FrameworkMsixIdentity',
         'Assert-MicrosoftSignedPackage', 'Assert-MicrosoftSignedNuGet',
-        'Get-X64ProviderRequirement')) {
+        'Get-X64ProviderRequirement', 'Ensure-Directory')) {
     $definition = $ast.Find({
         param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -58,6 +58,11 @@ $temporary = Join-Path ([IO.Path]::GetTempPath()) ('AionBootstrapTests-' + [guid
 $previousCache = $env:NUGET_PACKAGES
 try {
     New-Item -ItemType Directory -Path $temporary | Out-Null
+    $missingDirectory = Join-Path $temporary 'clean-export\nuget-local'
+    Ensure-Directory $missingDirectory
+    if (-not (Test-Path -LiteralPath $missingDirectory -PathType Container)) {
+        throw 'Bootstrap did not create the missing local NuGet feed directory.'
+    }
     $env:NUGET_PACKAGES = $null
     $config = Join-Path $temporary 'nuget.config'
     [IO.File]::WriteAllText($config,

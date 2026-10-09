@@ -247,6 +247,13 @@ function Get-X64ProviderRequirement {
     return $null
 }
 
+function Ensure-Directory {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+        New-Item -ItemType Directory -Path $Path -Force | Out-Null
+    }
+}
+
 if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
     Stop-WithRecovery -Title '.NET SDK was not found' -Recovery @(
         'Install the .NET 9 SDK, then open a new PowerShell and re-run:',
@@ -570,6 +577,7 @@ if ($fw -and $fw.Version -eq $targetFwVersion) {
 
 # --- 5. SDK nupkg in nuget-local/ ------------------------------------------
 $nugetLocal = Join-Path $PSScriptRoot 'nuget-local'
+Ensure-Directory $nugetLocal
 $expectedNupkg = Join-Path $nugetLocal $expectedNupkgName
 if (Test-Path $expectedNupkg) {
     if (-not $useLocalAssets -or
