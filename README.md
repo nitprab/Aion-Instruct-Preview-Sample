@@ -12,9 +12,8 @@ entire in-box API.
 > **Preview notes**
 >
 > - **Platform support.** The matching SDK framework supports **ARM64 Snapdragon** with
->   catalog-managed QNN (minimum EP `2.2480.49`) and **x64 Intel/AMD** with embedded OpenVINO
->   (LNL) or VitisAI (STX). All three SDK execution paths have been validated on hardware; a compatible
->   device and driver are required. Other Intel/AMD families are not independently validated.
+>   catalog-managed QNN (minimum EP `2.2480.49`) and **x64 Intel Lunar Lake** with
+>   catalog-managed OpenVINO (minimum EP `1.8.95`). **AMD support is coming soon.**
 >   There is no CPU fallback.
 > - **Performance.** The first-update latency and updates/sec shown in the app are **preliminary,
 >   app-observed streaming measurements — not tokenizer throughput or final model performance.**
@@ -23,6 +22,15 @@ entire in-box API.
 >   SDK, `Bootstrap.ps1` rejects it rather than installing an incompatible framework. Use the
 >   matching signed release once published. The moderation behavior below does not establish
 >   RAI qualification.
+
+## Documentation and license
+
+- [Improving Prompts for Aion](docs/prompt-guide.md) — an evidence-driven guide to prompt
+  contracts, evaluation scenarios, constrained output, controlled experiments, and agent-assisted
+  prompt optimization for Aion and other small language models.
+- [Pre-release validation package EULA](docs/Aion-Instruct-Preview-Pre-Release-EULA.docx) —
+  Microsoft Software License Terms for the limited-use Aion Instruct Windows Developer Validation
+  Package. Review these terms before downloading or using the pre-release validation package.
 
 ## Quickstart
 
@@ -42,8 +50,8 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 ```
 
 `Bootstrap.ps1` downloads and installs the matching model framework and SDK NuGet, then builds
-and launches the chat app. On ARM64, the framework's bundled WinML catalog acquires QNN EP 2
-when the model first loads; the x64 framework already includes the Intel and AMD providers.
+and launches the chat app. The framework's bundled WinML catalog acquires the compatible QNN,
+or OpenVINO execution provider when the model first loads. AMD support is coming soon.
 Cold NPU cache compilation can take several minutes (longer for some models and devices);
 subsequent launches reuse valid caches.
 
@@ -71,11 +79,9 @@ bootstrap does not silently substitute the installed build.
 
 ## Prerequisites
 
-- **Windows 11** on an ARM64 Snapdragon Copilot+ PC (QNN), an x64 Intel Lunar Lake Copilot+
-  PC (embedded OpenVINO), or an x64 AMD Strix Point Copilot+ PC (embedded VitisAI). The SDK
-  automatically detects the NPU and selects its matching provider. ARM64 requires a certified
-  catalog QNN EP at version `2.2480.49` or newer; neither x64 platform needs a separate EP
-  installation. An NPU is required—there is no CPU fallback.
+- **Windows 11** on an ARM64 Snapdragon Copilot+ PC (QNN) or x64 Intel Lunar Lake Copilot+
+  PC (OpenVINO). The SDK uses the WinML catalog and requires QNN `2.2480.49` or OpenVINO
+  `1.8.95` or newer. AMD support is coming soon. An NPU is required—there is no CPU fallback.
 
 **Build-time vs run-time — these are different things.** A common source of confusion (see [Troubleshooting](#troubleshooting)) is assuming a build error means a *runtime* component is missing. It usually doesn't. Keep the two lists straight:
 
@@ -104,7 +110,7 @@ Developer Mode.
 
   (or grab the installer from <https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads>.) This runtime is needed only to **run**, not to build.
 - **Inference runtime:** WinML and ORT are bundled in the Aion framework, which acquires
-  compatible QNN EP 2 during ARM64 model initialization if needed. The sample does not need
+  the compatible catalog EP during model initialization if needed. The sample does not need
   Windows App Runtime 1.8. An optional legacy QNN acquisition utility uses Runtime 1.8,
   but it is not part of the quickstart.
 - **.NET 9 Desktop Runtime** (`winget install --id Microsoft.DotNet.DesktopRuntime.9`, or the `windowsdesktop-runtime-9.0.x-win-<arch>.exe` installer). The .NET 9 SDK above already includes this, so you only need it separately on a run-only machine that has no SDK.
@@ -164,7 +170,7 @@ tokens in source control. Feed access and availability of the required package v
 prerequisites. No automatic feed fallback or TLS verification bypass is performed.
 
 The override applies to NuGet restore for the sample. It does not redirect GitHub release
-downloads, Windows runtime installation, or QNN acquisition by the bundled WinML catalog. The checked-in
+downloads, Windows runtime installation, or execution-provider acquisition by the bundled WinML catalog. The checked-in
 public feed configuration remains unchanged.
 
 For build-only validation, pass the same configuration directly:
@@ -181,8 +187,8 @@ A few notes on the steps in the [Quickstart](#quickstart) above:
 - **What `Bootstrap.ps1` does.** Detects your arch, enables Developer Mode if needed, gets the
   latest compatible signed release from this repo's public GitHub releases, installs or upgrades
   the matching framework MSIX, and restores the SDK NuGet. It then builds and launches the app
-  via `dotnet run`; the framework acquires QNN on ARM64 during model creation if needed. It never
-  fetches private build-input EP packages.
+  via `dotnet run`; the framework acquires a compatible catalog execution provider during model
+  creation if needed. It never fetches private build-input EP packages.
 - **First launch.** Model loading can take several minutes while the runtime compiles NPU caches.
   Valid caches are reused. Response latency depends on prompt length, hardware, and moderation;
   the first progress callback is approved output, not a measurement of the model's first token.
@@ -202,7 +208,7 @@ MSIX for your device and the SDK NuGet:
 | Asset | Who needs it |
 |---|---|
 | `AionInstructPreview.LanguageModel.Framework_<ver>_ARM64.msix` | ARM64 Snapdragon (catalog QNN) |
-| `AionInstructPreview.LanguageModel.Framework_<ver>_x64.msix` | x64 Intel/AMD (embedded OpenVINO/VitisAI) |
+| `AionInstructPreview.LanguageModel.Framework_<ver>_x64.msix` | x64 framework; Intel OpenVINO is supported, and AMD support is coming soon |
 | `AionInstructPreview.Text.Framework.<ver>.nupkg` | The SDK NuGet (arch-neutral) |
 
 Official MSIXes are signed for distribution. Local PR validation builds are test-signed and may
@@ -264,11 +270,11 @@ See [`nuget.config`](nuget.config) in this repo for the working version. Once th
 An external project needs **both** of these `PackageReference`s in its csproj:
 
 ```xml
-<PackageReference Include="AionInstructPreview.Text.Framework" Version="1.0.1" />
+<PackageReference Include="AionInstructPreview.Text.Framework" Version="[1.0.1]" />
 <PackageReference Include="Microsoft.Windows.CsWinRT" Version="2.1.5" />
 ```
 
-Pin the SDK version exactly rather than floating with `1.0.*`. The local feed is a folder you
+Use the exact SDK range `[1.0.1]` rather than floating with `1.0.*`. The local feed is a folder you
 populate by hand, so a wildcard silently resolves to whichever `.nupkg` happens to be sitting
 there — an older one is missing `AionInstructPreview.Imaging.winmd` and fails with `CS0246
 'ImageDescriptionGenerator' not found` rather than a version error. This sample requires
@@ -321,7 +327,7 @@ Those references do the API projection identically to the packaged app. Because 
 | API projection (`using AionInstructPreview.Text;`) | `AionInstructPreview.Text.Framework.props` feeds CsWinRT | **identical** — same `PackageReference` |
 | Framework dependency | injected into your `Package.appxmanifest` by `AionInstructPreview.Text.Framework.targets` at build | **no manifest, so the targets no-op** — taken at runtime via `TryCreatePackageDependency` / `AddPackageDependency` ([`FrameworkDependency.cs`](unpackaged-wpf/FrameworkDependency.cs)) |
 | WinRT activation | cross-package activation via the package graph | **registration-free** — with the framework dir on the DLL search path, CsWinRT activates the runtimeclasses through the framework's `AionInstructPreview.Text.dll`. No SxS fusion manifest, no HKLM registration. |
-| Execution provider | auto-selected by the SDK (catalog QNN or embedded Intel/AMD) | **identical** — the SDK picks the EP internally |
+| Execution provider | auto-selected by the SDK through the WinML catalog | **identical** — the SDK picks the EP internally |
 
 So the only consumer code an unpackaged app adds over a packaged one is a single runtime call in [`FrameworkDependency.cs`](unpackaged-wpf/FrameworkDependency.cs), made once at startup (`App.OnStartup`) before the first activation:
 
@@ -618,7 +624,7 @@ Start here if `Bootstrap.ps1`, the build, or the app fails.
 ### Runtime and deployment
 
 - **`0x80073D19` "package family does not have any matching framework packages installed"** when deploying the consumer MSIX → the Aion Instruct Preview framework MSIX isn't installed. `Get-AppxPackage Microsoft.AionInstructPreview.Framework.1.0` should return a row.
-- **`NuGet restore` fails with package not found** → put `AionInstructPreview.Text.Framework.1.0.1.nupkg` in `./nuget-local/`. This sample uses an exact version pin.
+- **`NuGet restore` fails with package not found** → put `AionInstructPreview.Text.Framework.1.0.1.nupkg` in `./nuget-local/`. This sample uses the exact range `[1.0.1]`.
 - **Bootstrap reports a conflicting cached `1.0.1` SDK** → NuGet does not replace the global
   cache when a local package with the same version changes. Use a newly versioned SDK package,
   or set `NUGET_PACKAGES` to a new existing empty directory for this validation run. Bootstrap
@@ -644,9 +650,9 @@ Get-Content diag.txt | Set-Clipboard
 # paste into the "Diagnose-AionInstructPreview.ps1 output" field on the form
 ```
 
-Initialization requires a compatible NPU provider. On ARM64, check catalog QNN; on x64,
-check the embedded Intel/AMD payload and NPU drivers. Include the diagnostic's selected EP
-and loaded-module paths in a bug report.
+Initialization requires a compatible NPU provider. Check the WinML catalog package and NPU
+driver: QNN `2.2480.49+` or OpenVINO `1.8.95+`. AMD support is coming soon. Include the
+diagnostic's selected EP, catalog version, and loaded-module paths in a bug report.
 
 ---
 
@@ -671,6 +677,13 @@ Aion-Instruct-Preview-Sample/
 ├── nuget.config                     # Feeds: nuget.org + ./nuget-local/
 ├── nuget-local/                     # Drop the SDK pipeline's .nupkg here
 ├── Bootstrap.ps1                    # One-shot quickstart (download framework, build, run)
-├── scripts/Diagnose-AionInstructPreview.ps1      # First-launch hang diagnostic
+├── docs/
+│   ├── prompt-guide.md              # Prompt evaluation and optimization guidance
+│   └── Aion-Instruct-Preview-Pre-Release-EULA.docx # Limited-use pre-release terms
+├── scripts/
+│   ├── Diagnose-AionInstructPreview.ps1          # First-launch hang diagnostic
+│   └── UnpackagedPrerequisites.ps1               # Shared unpackaged app prerequisite checks
+├── unpackaged-console/              # Console sample without package identity
+├── unpackaged-wpf/                  # WPF sample without package identity
 └── Assets/StoreLogo.png             # Placeholder app icon
 ```

@@ -205,7 +205,13 @@ public sealed class ChatViewModel : INotifyPropertyChanged, IDisposable
     {
         try
         {
-            _aionClient = await AionInstructClient.CreateAsync().ConfigureAwait(true);
+            var client = await AionInstructClient.CreateAsync().ConfigureAwait(true);
+            if (_disposed)
+            {
+                client.Dispose();
+                return;
+            }
+            _aionClient = client;
             State = ModelState.Ready;
             Raise(nameof(CanStartNewConversation));
             Raise(nameof(NewConversationButtonEnabled));
@@ -215,7 +221,7 @@ public sealed class ChatViewModel : INotifyPropertyChanged, IDisposable
         {
             ErrorMessage =
                 $"Aion Instruct Preview couldn't load (0x{ex.HResult:X8}).{Environment.NewLine}" +
-                "Make sure the Aion Instruct Preview framework MSIX is installed -- run Bootstrap.ps1, or scripts\\Diagnose-AionInstructPreview.ps1 to check every prerequisite.";
+                "Make sure the Aion framework and a compatible NPU execution provider are installed -- run Bootstrap.ps1, or scripts\\Diagnose-AionInstructPreview.ps1 to check every prerequisite.";
             State = ModelState.Error;
         }
     }
@@ -297,7 +303,7 @@ public sealed class ChatViewModel : INotifyPropertyChanged, IDisposable
                     break;
 
                 case LanguageModelResponseStatus.BlockedByPolicy:
-                    SetFailure(aionMessage, "This text-generation filter policy is not supported. Use Minimum or Low severity.");
+                    SetFailure(aionMessage, "This request was blocked by the preview's content policy.");
                     break;
 
                 default:
@@ -328,7 +334,7 @@ public sealed class ChatViewModel : INotifyPropertyChanged, IDisposable
     // ImageDescriptionGenerator API exactly.
     public async Task DescribeImageAsync(StorageFile file)
     {
-        if (file is null) return;
+        if (_disposed || file is null) return;
         if (!DescribeEnabled) return;
 
         // Set before the first await so a second click can't slip through.
@@ -355,6 +361,7 @@ public sealed class ChatViewModel : INotifyPropertyChanged, IDisposable
             // A thumbnail is a nicety; a decode failure here must not block description.
         }
 
+        if (_disposed) return;
         ImageMessages.Add(userMessage);
 
         var aionMessage = new Message(MessageRole.Aion, string.Empty, MessageStatus.Streaming);
@@ -366,10 +373,17 @@ public sealed class ChatViewModel : INotifyPropertyChanged, IDisposable
             {
                 aionMessage.StatusDetail =
                     "Loading the vision models (SigLIP2 + projector). First-run cache compilation may take several minutes.";
-                _descriptionClient = await AionImageDescriptionClient.CreateAsync().ConfigureAwait(true);
+                var client = await AionImageDescriptionClient.CreateAsync().ConfigureAwait(true);
+                if (_disposed)
+                {
+                    client.Dispose();
+                    return;
+                }
+                _descriptionClient = client;
                 aionMessage.StatusDetail = null;
             }
 
+            if (_disposed) return;
             var generation = await _descriptionClient.DescribeAsync(
                 file,
                 kind,
@@ -380,13 +394,14 @@ public sealed class ChatViewModel : INotifyPropertyChanged, IDisposable
                     // Append, don't assign.
                     _dispatcher.TryEnqueue(() =>
                     {
-                        if (aionMessage.Status == MessageStatus.Streaming)
+                        if (!_disposed && aionMessage.Status == MessageStatus.Streaming)
                         {
                             aionMessage.Text += delta;
                         }
                     });
                 }).ConfigureAwait(true);
 
+            if (_disposed) return;
             var result = generation.Response;
             aionMessage.Metrics = generation.Metrics;
 
@@ -414,11 +429,15 @@ public sealed class ChatViewModel : INotifyPropertyChanged, IDisposable
         }
         catch (Exception ex)
         {
+            if (_disposed) return;
             SetFailure(aionMessage, FailureDetail(ex));
         }
         finally
         {
-            State = ModelState.Ready;
+            if (!_disposed)
+            {
+                State = ModelState.Ready;
+            }
         }
     }
 

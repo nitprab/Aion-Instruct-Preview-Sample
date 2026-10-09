@@ -12,13 +12,25 @@ $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile(
     (Join-Path $root 'Bootstrap.ps1'), [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw 'Bootstrap.ps1 contains syntax errors.' }
-foreach ($name in @('Assert-SdkNuGetCacheMatches', 'Assert-LocalFrameworkMatches')) {
+foreach ($name in @('Assert-SdkNuGetCacheMatches', 'Assert-LocalFrameworkMatches',
+        'Assert-FrameworkMsixIdentity', 'Get-FrameworkMsixIdentity',
+        'Assert-MicrosoftSignedPackage', 'Assert-MicrosoftSignedNuGet',
+        'Get-X64ProviderRequirement')) {
     $definition = $ast.Find({
         param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
     }, $true)
     if (-not $definition) { throw "Missing bootstrap function: $name" }
     . ([scriptblock]::Create($definition.Extent.Text))
+}
+$signatureDefinition = $ast.Find({
+    param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq 'Assert-MicrosoftSignedPackage'
+}, $true)
+if ($signatureDefinition.Extent.Text -notmatch 'IgnoreNotTimeValid' -or
+    $signatureDefinition.Extent.Text -notmatch '8F43288AD272F3103B6FB1428485EA3014C0BCFE') {
+    throw 'Downloaded release signature validation must pin the production root and permit timestamped signer expiry.'
 }
 
 function Assert-Rejected {
@@ -29,6 +41,18 @@ function Assert-Rejected {
     }
     throw "Expected rejection: $Message"
 }
+
+function Stop-WithRecovery {
+    param([string]$Title, [string[]]$Recovery)
+    throw $Title
+}
+
+$intelRequirement = Get-X64ProviderRequirement 'Intel Core Ultra'
+if ($intelRequirement.Label -ne 'OpenVINO' -or
+    $intelRequirement.Minimum -ne [version]'1.8.95.0') {
+    throw 'Intel provider requirements are incorrect.'
+}
+Assert-Rejected { Get-X64ProviderRequirement 'AMD Ryzen AI' } 'AMD support is coming soon'
 
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ('AionBootstrapTests-' + [guid]::NewGuid())
 $previousCache = $env:NUGET_PACKAGES
@@ -71,14 +95,55 @@ try {
     New-Item -ItemType Directory -Path $layout, $installed | Out-Null
     $blockMap = Join-Path $layout 'AppxBlockMap.xml'
     [IO.File]::WriteAllText($blockMap, '<BlockMap>build A</BlockMap>')
+    [IO.File]::WriteAllText((Join-Path $layout 'AppxManifest.xml'), @'
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
+  <Identity Name="AionInstructPreview.LanguageModel.Framework"
+            Publisher="CN=Microsoft Corporation"
+            Version="1.0.0.2"
+            ProcessorArchitecture="x64" />
+</Package>
+'@)
     $msix = Join-Path $temporary 'framework.msix'
     [IO.Compression.ZipFile]::CreateFromDirectory($layout, $msix)
+    $script:FrameworkPkgId = 'AionInstructPreview.LanguageModel.Framework'
+    $identity = Assert-FrameworkMsixIdentity -MsixPath $msix `
+        -ExpectedArchitecture x64 -ExpectedVersion ([version]'1.0.0.2')
+    if ($identity.Version -ne [version]'1.0.0.2') {
+        throw 'Framework identity validation returned the wrong version.'
+    }
+    Assert-Rejected {
+        Assert-FrameworkMsixIdentity -MsixPath $msix `
+            -ExpectedArchitecture ARM64 -ExpectedVersion ([version]'1.0.0.2')
+    } 'is not the Aion ARM64 framework'
+    Assert-Rejected {
+        Assert-FrameworkMsixIdentity -MsixPath $msix `
+            -ExpectedArchitecture x64 -ExpectedVersion ([version]'1.0.0.3')
+    } 'expected 1.0.0.3'
+
     Assert-Rejected { Assert-LocalFrameworkMatches $msix $installed } 'block map is missing'
     Copy-Item $blockMap $installed
     Assert-LocalFrameworkMatches -MsixPath $msix -InstallLocation $installed
     [IO.File]::WriteAllText((Join-Path $installed 'AppxBlockMap.xml'), '<BlockMap>build B</BlockMap>')
     Assert-Rejected { Assert-LocalFrameworkMatches $msix $installed } 'same version but different contents'
-    Write-Output 'PASS: 6 effective-cache scenarios and 3 framework-content checks; no packages deployed.'
+    Assert-Rejected { Assert-MicrosoftSignedPackage $msix } 'not validly signed by Microsoft Corporation'
+
+    $script:SdkNuGetSignerFingerprint = '9A1B131BEE0605433056A4EA3815478A8E177961A968C6C0027C1093D1FEB630'
+    $script:nugetVerifyExitCode = 0
+    $script:nugetVerifyArguments = $null
+    function dotnet {
+        $script:nugetVerifyArguments = @($args)
+        $global:LASTEXITCODE = $script:nugetVerifyExitCode
+        if ($script:nugetVerifyExitCode) { 'NU3001: signature mismatch' }
+    }
+    Assert-MicrosoftSignedNuGet $package
+    if (($script:nugetVerifyArguments -join ' ') -notlike
+        "*--certificate-fingerprint $script:SdkNuGetSignerFingerprint*") {
+        throw 'NuGet verification did not enforce the expected signer fingerprint.'
+    }
+    $script:nugetVerifyExitCode = 1
+    Assert-Rejected { Assert-MicrosoftSignedNuGet $package } 'does not have the expected Microsoft NuGet signature'
+
+    Write-Output 'PASS: cache, framework identity/content, MSIX signature, and NuGet signer checks; no packages deployed.'
 } finally {
     $env:NUGET_PACKAGES = $previousCache
     Remove-Item -LiteralPath $temporary -Recurse -Force

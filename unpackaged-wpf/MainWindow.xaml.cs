@@ -105,7 +105,7 @@ public partial class MainWindow : Window
                     LanguageModelResponseStatus.ResponseBlockedByContentModeration =>
                         "[The response was blocked by content moderation. No final response is available.]",
                     LanguageModelResponseStatus.BlockedByPolicy =>
-                        "[This text-generation filter policy is not supported. Use Minimum or Low severity.]",
+                        "[This request was blocked by the preview's content policy.]",
                     LanguageModelResponseStatus.PromptLargerThanContext =>
                         "[The conversation reached the context limit. Restart the app to start a new conversation.]",
                     _ => "[Generation failed. This is an operational failure, not a moderation decision.]",

@@ -88,7 +88,7 @@ try
         LanguageModelResponseStatus.ResponseBlockedByContentModeration =>
             "The response was blocked by content moderation.",
         LanguageModelResponseStatus.BlockedByPolicy =>
-            "This text-generation filter policy is not supported. Use Minimum or Low severity.",
+            "This request was blocked by the preview's content policy.",
         LanguageModelResponseStatus.PromptLargerThanContext =>
             "The prompt exceeded the context limit.",
         _ => "Generation failed. This is an operational failure, not a moderation decision.",

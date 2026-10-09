@@ -86,6 +86,7 @@ Write-Host ('Host: {0}  User: {1}  Date: {2}' -f $env:COMPUTERNAME, $env:USERNAM
 Write-Section '1. Hardware'
 
 $ci = Get-ComputerInfo -Property CsManufacturer, CsModel, CsProcessors -ErrorAction SilentlyContinue
+$procName = '(unknown)'
 if ($ci) {
     $proc = $ci.CsProcessors | Select-Object -First 1
     $procName = if ($proc) { $proc.Name } else { '(unknown)' }
@@ -100,11 +101,11 @@ if ($ci) {
     } elseif ($arch -eq 'ARM64') {
         Write-Check WARN 'ARM64 but processor name doesn''t match a known Snapdragon SKU' $detail
     } elseif ($arch -eq 'x64' -and $procName -match 'Intel|Core\s*Ultra|Lunar|Arrow|Meteor') {
-        Write-Check PASS 'Intel x64 -- embedded OpenVINO NPU path expected' $detail
+        Write-Check PASS 'Intel x64 -- catalog OpenVINO NPU path expected' $detail
     } elseif ($arch -eq 'x64' -and $procName -match 'AMD|Ryzen|Strix') {
-        Write-Check PASS 'AMD x64 -- embedded VitisAI NPU path expected' $detail
+        Write-Check WARN 'AMD support is coming soon' $detail
     } elseif ($arch -eq 'x64') {
-        Write-Check WARN 'x64 host, but the processor name does not match a validated Intel or AMD NPU' $detail
+        Write-Check WARN 'x64 host, but the processor name does not match a supported Intel NPU' $detail
     } else {
         Write-Check WARN ('Unexpected architecture: ' + $rawArch) $detail
     }
@@ -178,6 +179,12 @@ if ($arch -eq 'ARM64') {
         Check-Package -Name '*WinML.Qualcomm.QNN.EP*.2*' `
                       -Friendly 'Qualcomm QNN execution provider 2' -MinVersion '2.2480.49.0'
     }
+} elseif ($arch -eq 'x64' -and $procName -match 'Intel') {
+    Check-Package -Name '*WinML.Intel.OpenVINO.EP.Framework.2*' `
+                  -Friendly 'Intel OpenVINO catalog execution provider' `
+                  -MinVersion '1.8.95.0'
+} elseif ($arch -eq 'x64' -and $procName -match 'AMD|Ryzen|Strix') {
+    Write-Check WARN 'AMD support is coming soon; provider readiness was not evaluated'
 }
 # The packaged WinUI app is optional: the console and WPF samples are equally valid
 # consumers, and a developer using only those should not get a hard failure here.
@@ -190,12 +197,11 @@ Check-Package -Name 'AionInstructPreviewChat' -Friendly 'AionInstructPreview.Cha
 # non-zero count says nothing about whether the SDK can actually run. It previously
 # reported PASS on a machine whose required OpenVINO EP was missing and where the SDK
 # could not start at all. The pinned per-architecture checks above are the real gate;
-# this list is here to help a human see what is present. The x64 providers are
-# supplied by the Aion framework, not these standalone catalog packages.
+# this list is here to help a human see what is present.
 Write-Host ''
 Write-Host '       (scanning for execution-provider packages...)' -ForegroundColor DarkGray
 $epPackages = @(Get-AppxPackage | Where-Object {
-    $_.Name -match 'Qnn|Qualcomm|WindowsWorkload|EP\.|ExecutionProvider|OnnxRuntime|MachineLearning|OpenVINO'
+    $_.Name -match 'Qnn|Qualcomm|AMD|Vitis|WindowsWorkload|EP\.|ExecutionProvider|OnnxRuntime|MachineLearning|OpenVINO'
 })
 if ($epPackages.Count -gt 0) {
     $detail = ($epPackages | ForEach-Object { '{0,-65} {1,-12} {2}' -f $_.Name, $_.Architecture, $_.Version }) -join "`n"
@@ -221,12 +227,6 @@ if ($aionPkg) {
         'muffinapi.dll'                   = $true
         'Models'                          = $true
     }
-    if ($arch -eq 'x64') {
-        foreach ($name in @('EmbeddedExecutionProviders.txt', 'NPUDetect.dll',
-                'onnxruntime_providers_openvino_plugin.dll', 'onnxruntime_vitisai_ep.dll')) {
-            $expected[$name] = $true
-        }
-    }
     $missing = @()
     foreach ($name in $expected.Keys) {
         if (-not (Test-Path (Join-Path $installRoot $name))) {
@@ -234,7 +234,7 @@ if ($aionPkg) {
         }
     }
     if ($missing.Count -eq 0) {
-        Write-Check PASS 'Required framework runtime and embedded provider files present'
+        Write-Check PASS 'Required framework runtime and model files present'
     } else {
         Write-Check FAIL ('Missing in framework MSIX: ' + ($missing -join ', '))
     }
@@ -585,8 +585,8 @@ if ($noAppToCapture) {
                 }
                 '^no-npu-ep-available$' {
                     Write-Check FAIL ("SDK found no compatible NPU EP; CPU fallback is not supported. " +
-                        'On Snapdragon, update the catalog QNN provider and NPU driver. ' +
-                        'On Intel/AMD x64, verify the embedded EP files and NPU driver.')
+                        'Verify the catalog provider version and NPU driver: QNN 2.2480.49+, ' +
+                        'OpenVINO 1.8.95+. AMD support is coming soon.')
                 }
                 '^no-catalog$' {
                     Write-Check FAIL ('SDK could not enumerate the WinML catalog; CPU fallback is not supported. ' +

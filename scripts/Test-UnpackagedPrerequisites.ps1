@@ -10,7 +10,7 @@ $root = Split-Path $PSScriptRoot -Parent
 
 function Test-Launcher {
     param([string]$Path, [bool]$HasWar2, [string]$FrameworkVersion, [bool]$ExpectBuild,
-        [string]$NuGetConfig)
+        [string]$NuGetConfig, [string]$WarArchitecture = 'ARM64')
 
     $queries = [Collections.Generic.List[string]]::new()
     function Get-AppxPackage {
@@ -24,7 +24,11 @@ function Test-Launcher {
             }
         }
         if ($Name -eq 'Microsoft.WindowsAppRuntime.2*' -and $HasWar2) {
-            return [PSCustomObject]@{ Name = 'Microsoft.WindowsAppRuntime.2' }
+            return [PSCustomObject]@{
+                Name = 'Microsoft.WindowsAppRuntime.2'
+                Version = '2.0.1.0'
+                Architecture = $WarArchitecture
+            }
         }
     }
     function Get-ChildItem { param($Path, $Filter) return 'SDK-package-present' }
@@ -61,6 +65,8 @@ foreach ($relative in @('unpackaged-console\Run.ps1', 'unpackaged-wpf\Run.ps1'))
     Test-Launcher -Path $path -HasWar2 $false -FrameworkVersion '1.0.0.2' -ExpectBuild $false
     Test-Launcher -Path $path -HasWar2 $true -FrameworkVersion '1.0.0.1' -ExpectBuild $false
     Test-Launcher -Path $path -HasWar2 $true -FrameworkVersion '1.0.0.0' -ExpectBuild $false
+    Test-Launcher -Path $path -HasWar2 $true -FrameworkVersion '1.0.0.2' -ExpectBuild $false `
+        -WarArchitecture 'x64'
     Test-Launcher -Path $path -HasWar2 $true -FrameworkVersion '1.0.0.2' -ExpectBuild $true `
         -NuGetConfig (Join-Path $root 'nuget.config')
 }
@@ -80,4 +86,4 @@ foreach ($parameter in @('FrameworkMsixPath', 'SdkNuGetPath')) {
     }
     if (-not $rejected) { throw "Bootstrap did not reject lone -$parameter before setup." }
 }
-Write-Output 'PASS: 10 launcher scenarios and 5 missing-input checks; no packages or apps changed.'
+Write-Output 'PASS: 12 launcher scenarios and 5 missing-input checks; no packages or apps changed.'

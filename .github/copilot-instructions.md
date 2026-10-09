@@ -2,8 +2,8 @@
 
 You are working in the **consumer sample** for the **Aion Instruct Preview SDK**: an on-device
 language model that runs locally on the Copilot+ PC NPU — catalog QNN on Snapdragon (ARM64),
-embedded OpenVINO on Intel (x64), and embedded VitisAI on AMD (x64). A compatible NPU is required
-(no CPU fallback, no cloud calls).
+catalog OpenVINO on Intel (x64), with AMD support coming soon. A compatible NPU is required (no
+CPU fallback, no cloud calls).
 This repo shows a
 third-party developer how to (1) consume the SDK's framework package, (2) wire it into their own
 app, and (3) build + run a working chat app. Use this file to orient fast; the
@@ -57,7 +57,7 @@ release, drops the SDK NuGet into `./nuget-local/`, then builds and launches):
 ```
 
 **Manual build + run** (packaged WinUI app). Builds for **ARM64** (Snapdragon/QNN) and **x64**
-(Intel/OpenVINO or AMD/VitisAI) — `-p:Platform=ARM64` or `-p:Platform=x64`. The csproj defaults `$(Platform)` to
+(Intel/OpenVINO; AMD support is coming soon) — `-p:Platform=ARM64` or `-p:Platform=x64`. The csproj defaults `$(Platform)` to
 the box's *native* arch, normalising `AMD64` to `x64`, so a bare `dotnet build` does the right thing.
 
 ```powershell
@@ -92,11 +92,11 @@ README → [Use Aion Instruct Preview in your own app](../README.md#use-aion-ins
    transitively does NOT import its source-generator targets, and you'll get a wall of
    `CS0246 LanguageModel not found`):
    ```xml
-   <PackageReference Include="AionInstructPreview.Text.Framework" Version="1.0.1" />
+   <PackageReference Include="AionInstructPreview.Text.Framework" Version="[1.0.1]" />
    <PackageReference Include="Microsoft.Windows.CsWinRT" Version="2.1.5" />
    ```
-   Pin the SDK version exactly — the local feed is hand-populated, so `1.0.*` silently resolves to
-   whatever `.nupkg` is present. This sample requires **1.0.1** for the updated text
+   Pin the SDK with the exact range `[1.0.1]` — the local feed is hand-populated, so `1.0.*`
+   silently resolves to whatever `.nupkg` is present. This sample requires **1.0.1** for the updated text
    contract and includes `AionInstructPreview.Imaging.winmd`.
    A **packaged** app additionally needs `Microsoft.WindowsAppSDK`, `Microsoft.Windows.SDK.BuildTools`,
    and (for `dotnet run` without VS) `Microsoft.Windows.SDK.BuildTools.WinApp` — see the root
@@ -170,7 +170,7 @@ API reference: README → [API surface used](../README.md#api-surface-used).
 
 ## Hard rules / gotchas (do not violate)
 
-- **Snapdragon/QNN, Intel LNL/OpenVINO, and AMD STX/VitisAI are hardware-validated.** The csproj defaults `$(Platform)`
+- **Snapdragon/QNN and Intel LNL/OpenVINO are supported; AMD support is coming soon.** The csproj defaults `$(Platform)`
   to the box's native arch and normalises `AMD64` to `x64` — don't break that logic.
 - **Never build under `C:\Windows\System32`** (the default dir of an elevated prompt). UAC file
   virtualization corrupts CsWinRT / XAML codegen (`cswinrt.exe exited with code 1`). Build
