@@ -23,11 +23,42 @@ entire in-box API.
 >   matching signed release once published. The moderation behavior below does not establish
 >   RAI qualification.
 
+## Developer validation limitations
+
+> [!WARNING]
+> This package is exclusively for developer validation of the new Aion Instruct model stack. It
+> is not for end-user or customer use. Do not ship any part of this package to end consumers.
+
+The package contains the final Aion Instruct model planned for release with Windows, but the
+validation package is not the final Windows delivery.
+
+- **Preliminary performance.** Performance measured with this preview is not representative of
+  the final Windows release. Runtime and integration optimizations are still underway.
+- **Hardware support.** ARM64 Snapdragon and x64 Intel Lunar Lake are supported for this
+  validation package. AMD support will be added soon.
+- **Responsible AI evaluation.** This package has not been thoroughly tested for Responsible AI
+  compliance. In particular, cross-prompt injection attacks and emotional inference are untested,
+  and the package may have vulnerabilities. Application developers remain responsible for
+  evaluating their scenarios and applying appropriate safeguards.
+- **Invisible watermarking.** The new model stack uses invisible watermarking to support
+  compliance with the EU AI Act. The watermark may become visible when model output is pasted
+  into certain applications or locations.
+- **LoRA compatibility.** Phi Silica-compatible LoRAs are not compatible with Aion Instruct. Use
+  Foundry Toolkit to create new custom LoRAs for Aion Instruct. This preview sample API does not
+  expose LoRA configuration.
+- **Behavioral changes.** Aion Instruct is a new model and behaves differently from Phi Silica.
+  Application developers must not rely on deterministic output.
+
+See [Transparency Notes](TRANSPARENCY_NOTES.md) for additional intended-use and model-limitations
+guidance.
+
 ## Documentation and license
 
 - [Improving Prompts for Aion](docs/prompt-guide.md) — an evidence-driven guide to prompt
   contracts, evaluation scenarios, constrained output, controlled experiments, and agent-assisted
   prompt optimization for Aion and other small language models.
+- [Transparency Notes](TRANSPARENCY_NOTES.md) — intended use, Responsible AI limitations,
+  preview behavior, distribution restrictions, watermarking, and LoRA compatibility.
 - [Pre-release validation package EULA](docs/Aion-Instruct-Preview-Pre-Release-EULA.docx) —
   Microsoft Software License Terms for the limited-use Aion Instruct Windows Developer Validation
   Package. Review these terms before downloading or using the pre-release validation package.
