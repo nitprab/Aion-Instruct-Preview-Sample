@@ -7,7 +7,7 @@
 #      or uses an explicitly supplied local artifact pair for release validation.
 #   3. Drops the SDK NuGet into ./nuget-local/.
 #   4. On ARM64 the framework acquires catalog QNN during first model creation.
-#      On supported x64 devices it acquires catalog OpenVINO.
+#      On supported x64 devices it acquires catalog OpenVINO or VitisAI.
 #   5. Builds and launches AionInstructPreview.Chat via 'dotnet run' (which
 #      registers the loose build-output layout as a development package).
 #
@@ -69,7 +69,8 @@ function Assert-SdkNuGetCacheMatches {
         [string]$PackagePath,
         [string]$Version,
         [string]$ConfigFile,
-        [string]$ProjectDirectory = $PSScriptRoot
+        [string]$ProjectDirectory = $PSScriptRoot,
+        [switch]$RefreshStaleCache
     )
 
     $settingsArgs = @()
@@ -95,11 +96,27 @@ function Assert-SdkNuGetCacheMatches {
     if ((Test-Path -LiteralPath $cached -PathType Leaf) -and
         (Get-FileHash -LiteralPath $cached -Algorithm SHA256).Hash -ne
         (Get-FileHash -LiteralPath $PackagePath -Algorithm SHA256).Hash) {
+        if ($RefreshStaleCache) {
+            Write-Host "Removing stale Aion SDK $Version cache at '$(Split-Path $cached -Parent)'."
+            Remove-Item -LiteralPath (Split-Path $cached -Parent) -Recurse -Force -ErrorAction Stop
+            return
+        }
         throw "The NuGet cache contains a different Aion SDK $Version at '$cached'. " +
             'NuGet treats package versions as immutable and would restore the stale contract. ' +
             'Use a new SDK package version, or set NUGET_PACKAGES to an existing empty directory ' +
             'for this validation and rerun Bootstrap.ps1.'
     }
+}
+
+function Update-SdkNuGet {
+    param([string]$Source, [string]$Destination)
+    if ((Test-Path -LiteralPath $Destination -PathType Leaf) -and
+        (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash -eq
+        (Get-FileHash -LiteralPath $Source -Algorithm SHA256).Hash) {
+        return $false
+    }
+    Copy-Item -LiteralPath $Source -Destination $Destination -Force -ErrorAction Stop
+    return $true
 }
 
 function Assert-LocalFrameworkMatches {
@@ -229,13 +246,12 @@ function Stop-WithRecovery {
 
 function Get-X64ProviderRequirement {
     param([string]$ProcessorName)
-    if ($ProcessorName -match 'AMD') {
-        Stop-WithRecovery `
-            -Title 'AMD support is coming soon' `
-            -Recovery @(
-                'Use a supported ARM64 Snapdragon or x64 Intel Lunar Lake Copilot+ PC for this preview.',
-                'Check a future release for AMD availability.'
-            )
+    if ($ProcessorName -match 'AMD|Ryzen|Strix') {
+        return [pscustomobject]@{
+            Label = 'VitisAI'
+            Pattern = $null
+            Minimum = [version]'1.8.80.0'
+        }
     }
     if ($ProcessorName -match 'Intel') {
         return [pscustomobject]@{
@@ -611,51 +627,43 @@ if ($fw) {
 $nugetLocal = Join-Path $PSScriptRoot 'nuget-local'
 Ensure-Directory $nugetLocal
 $expectedNupkg = Join-Path $nugetLocal $expectedNupkgName
-if (Test-Path $expectedNupkg) {
-    if (-not $useLocalAssets -or
-        (Get-FileHash $expectedNupkg).Hash -eq (Get-FileHash $SdkNuGetPath).Hash) {
-        Write-Skip "$expectedNupkgName already in nuget-local/ -- skipping download"
-    } else {
-        Copy-Item -LiteralPath $SdkNuGetPath -Destination $expectedNupkg -Force
-        Write-OK "Updated $expectedNupkgName from the local SDK build"
-    }
-} else {
+if (-not (Test-Path -LiteralPath $expectedNupkg)) {
     # Wipe stale older-version nupkgs so NuGet restore picks the new one cleanly.
     Get-ChildItem $nugetLocal -Filter 'AionInstructPreview.Text.Framework*.nupkg' -ErrorAction SilentlyContinue |
         ForEach-Object {
             Write-Skip "Removing stale $($_.Name) from nuget-local/"
             Remove-Item $_.FullName -Force
         }
-    if ($useLocalAssets) {
-        Copy-Item -LiteralPath $SdkNuGetPath -Destination $expectedNupkg
-    } else {
-        Write-Step "Downloading $expectedNupkgName ..."
+}
+$downloadDirectory = $null
+try {
+    $sourceNupkg = $SdkNuGetPath
+    if (-not $useLocalAssets) {
+        $downloadDirectory = Join-Path $nugetLocal ('sdk-download-' + [guid]::NewGuid())
+        Ensure-Directory $downloadDirectory
+        $sourceNupkg = Join-Path $downloadDirectory $expectedNupkgName
+        Write-Step "Downloading and verifying $expectedNupkgName from release $tag ..."
         $nupkgUrl = Get-AssetUrl -Name $expectedNupkgName
-        try {
-            Invoke-WebRequest -Uri $nupkgUrl -Headers $ghHeaders -OutFile $expectedNupkg -ErrorAction Stop
-        } catch {
-            Stop-WithRecovery `
-                -Title "Download failed for $expectedNupkgName ($($_.Exception.Message))" `
-                -Recovery @(
-                    "Visit https://github.com/$RepoOwner/$RepoName/releases/tag/$tag and check the asset list.",
-                    "Expected asset name: $expectedNupkgName"
-                )
-        }
+        Invoke-WebRequest -Uri $nupkgUrl -Headers $ghHeaders -OutFile $sourceNupkg -ErrorAction Stop
+        Assert-MicrosoftSignedNuGet $sourceNupkg
     }
-    Write-OK "Dropped $expectedNupkgName in nuget-local/"
-}
-if (-not $useLocalAssets) {
-    try {
-        Assert-MicrosoftSignedNuGet $expectedNupkg
-    } catch {
-        Remove-Item -LiteralPath $expectedNupkg -Force -ErrorAction SilentlyContinue
-        Stop-WithRecovery -Title $_.Exception.Message -Recovery @(
-            'Do not build with this package. Re-run Bootstrap to download the signed SDK package again.',
-            "Verify the release assets at https://github.com/$RepoOwner/$RepoName/releases/tag/$tag"
-        )
+    if (Update-SdkNuGet -Source $sourceNupkg -Destination $expectedNupkg) {
+        Write-OK "Updated $expectedNupkgName from the matching SDK artifacts"
+    } else {
+        Write-Skip "$expectedNupkgName already matches the SDK artifacts (SHA256)"
+    }
+} catch {
+    Stop-WithRecovery -Title "Could not prepare $expectedNupkgName ($($_.Exception.Message))" -Recovery @(
+        'Re-run Bootstrap to download and verify the matching SDK package again.',
+        "Verify the release assets at https://github.com/$RepoOwner/$RepoName/releases/tag/$tag"
+    )
+} finally {
+    if ($downloadDirectory -and (Test-Path -LiteralPath $downloadDirectory)) {
+        Remove-Item -LiteralPath $downloadDirectory -Recurse -Force -ErrorAction Stop
     }
 }
-Assert-SdkNuGetCacheMatches -PackagePath $expectedNupkg -Version $nupkgVersion -ConfigFile $configPath
+Assert-SdkNuGetCacheMatches -PackagePath $expectedNupkg -Version $nupkgVersion `
+    -ConfigFile $configPath -RefreshStaleCache:(!$useLocalAssets)
 
 # --- 5a. Execution-provider provisioning -----------------------------------
 # The framework uses its bundled WinML catalog to acquire the hardware provider during
@@ -670,8 +678,11 @@ if ($arch -eq 'ARM64') {
     }
 } else {
     if ($x64Requirement) {
-        $providerPackages = @(Get-AppxPackage -Name $x64Requirement.Pattern -ErrorAction SilentlyContinue |
-            Where-Object { "$($_.Architecture)" -eq 'X64' })
+        $providerPackages = @()
+        if ($x64Requirement.Pattern) {
+            $providerPackages = @(Get-AppxPackage -Name $x64Requirement.Pattern -ErrorAction SilentlyContinue |
+                Where-Object { "$($_.Architecture)" -eq 'X64' })
+        }
         $compatible = @($providerPackages |
             Where-Object { [version]$_.Version -ge $x64Requirement.Minimum })
         if ($compatible.Count -gt 0) {

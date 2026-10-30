@@ -1,7 +1,7 @@
 # Aion Instruct Preview Chat
 
 A WinUI 3 desktop chat app that runs against the **AionInstructPreview** on-device language model on
-ARM64 Snapdragon and x64 Intel Lunar Lake Copilot+ PCs. Text chunks stream into the bubble as
+ARM64 Snapdragon, x64 Intel Lunar Lake, and x64 AMD Ryzen AI Copilot+ PCs. Text chunks stream into the bubble as
 they're generated; app-observed first-update
 latency and updates/sec are shown under each reply. A progress update is not an exact tokenizer token.
 
@@ -14,8 +14,9 @@ entire in-box API.
 > **Preview notes**
 >
 > - **Platform support.** The matching SDK framework supports **ARM64 Snapdragon** with
->   catalog-managed QNN (minimum EP `2.2480.49`) and **x64 Intel Lunar Lake** with
->   catalog-managed OpenVINO (minimum EP `1.8.95`). **AMD support is coming soon.**
+>   catalog-managed QNN (minimum EP `2.2480.49`), **x64 Intel Lunar Lake** with
+>   catalog-managed OpenVINO (minimum EP `1.8.95`), and **x64 AMD Ryzen AI** with
+>   catalog-managed VitisAI (minimum EP `1.8.80`).
 >   There is no CPU fallback when a supported NPU provider is unavailable.
 > - **Performance.** The first-update latency and updates/sec shown in the app are **preliminary,
 >   app-observed streaming measurements — not tokenizer throughput or final model performance.**
@@ -35,8 +36,8 @@ validation package is not the final Windows delivery.
 
 - **Preliminary performance.** Performance measured with this preview is not representative of
   the final Windows release. Runtime and integration optimizations are still underway.
-- **Hardware support.** ARM64 Snapdragon and x64 Intel Lunar Lake are supported for this
-  validation package. AMD support will be added soon.
+- **Hardware support.** ARM64 Snapdragon, x64 Intel Lunar Lake, and x64 AMD Ryzen AI are
+  supported for this validation package.
 - **Responsible AI evaluation.** This package has not been thoroughly tested for Responsible AI
   compliance. In particular, cross-prompt injection attacks and emotional inference are untested,
   and the package may have vulnerabilities. Application developers remain responsible for
@@ -74,9 +75,9 @@ certificate as directed by your build provider, install the MSIX with `Add-AppxP
 the matching candidate NuGet in `nuget-local` before building. SDK build scripts are not included
 in this sample repository.
 
-You need an **ARM64 Snapdragon or x64 Intel Lunar Lake
+You need an **ARM64 Snapdragon, x64 Intel Lunar Lake, or x64 AMD Ryzen AI
 [Copilot+ PC](https://learn.microsoft.com/windows/ai/npu-devices/)** running **Windows 11**, plus
-a few tools. AMD support is coming soon.
+a few tools.
 
 - **.NET 9 SDK** — `winget install --id Microsoft.DotNet.SDK.9`
 - **Git** — `winget install --id Git.Git` (or download the repo ZIP from the green **Code** button).
@@ -93,8 +94,8 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 `Bootstrap.ps1` checks for Windows App Runtime 2 version `2.0.1.0` or newer and installs it if
 needed, downloads and installs the matching model framework and SDK NuGet, then builds and
-launches the chat app. The framework's bundled WinML catalog acquires the compatible QNN
-or OpenVINO execution provider when the model first loads. AMD support is coming soon.
+launches the chat app. The framework's bundled WinML catalog acquires the compatible QNN,
+OpenVINO, or VitisAI execution provider when the model first loads.
 Cold NPU cache compilation can take several minutes (longer for some models and devices);
 subsequent launches reuse valid caches.
 
@@ -224,9 +225,10 @@ and on download/hash failure; the joined MSIX is retained for verification and i
 
 ## Prerequisites
 
-- **Windows 11** on an ARM64 Snapdragon Copilot+ PC (QNN) or x64 Intel Lunar Lake Copilot+
-  PC (OpenVINO). The SDK uses the WinML catalog and requires QNN `2.2480.49` or OpenVINO
-  `1.8.95` or newer. AMD support is coming soon. A supported NPU provider is required; there is
+- **Windows 11** on an ARM64 Snapdragon Copilot+ PC (QNN), x64 Intel Lunar Lake Copilot+
+  PC (OpenVINO), or x64 AMD Ryzen AI Copilot+ PC (VitisAI). The SDK uses the WinML catalog
+  and requires QNN `2.2480.49+`, OpenVINO `1.8.95+`, or VitisAI `1.8.80+`.
+  A supported NPU provider is required; there is
   no CPU fallback when it is unavailable.
 
 **Build-time vs run-time — these are different things.** A common source of confusion (see [Troubleshooting](#troubleshooting)) is assuming a build error means a *runtime* component is missing. It usually doesn't. Keep the two lists straight:
@@ -333,7 +335,8 @@ A few notes on the steps in the [Quickstart](#quickstart) above:
 - **What `Bootstrap.ps1` does.** Detects your architecture, checks supported hardware, installs
   Windows App Runtime 2 if needed, and enables Developer Mode if needed. It queries the latest
   public release and stops if it predates framework `1.1.0.0`, installs or upgrades the matching
-  framework MSIX, and prepares the SDK NuGet. It then builds and launches the app
+  framework MSIX, and prepares the SDK NuGet, refreshing the local package and NuGet cache when
+  the release package contents change. It then builds and launches the app
   via `dotnet run`; the framework acquires a compatible catalog execution provider during model
   creation if needed. It never fetches private build-input EP packages.
 - **First launch.** Model loading can take several minutes while the runtime compiles NPU caches.
@@ -360,14 +363,14 @@ This runtime supplies the imaging and content-safety types used by the SDK.
 
 Download the matching artifacts from a
 [release](https://github.com/microsoft/Aion-Instruct-Preview-Sample/releases) containing framework
-**1.1.0.0** and SDK NuGet **1.1.0**. If that release is not available yet, use matching build
+**1.1.0.2** and SDK NuGet **1.1.0**. If that release is not available yet, use matching build
 artifacts. Choose one framework MSIX for your device and the SDK NuGet, and review the EULA
 before use:
 
 | Asset | Who needs it |
 |---|---|
-| `AionInstructPreview.LanguageModel.Framework_1.1.0.0_ARM64.msix` | ARM64 Snapdragon (catalog QNN) |
-| `AionInstructPreview.LanguageModel.Framework_1.1.0.0_x64.msix` | x64 Intel Lunar Lake (catalog OpenVINO); AMD support is coming soon |
+| `AionInstructPreview.LanguageModel.Framework_1.1.0.2_ARM64.msix` | ARM64 Snapdragon (catalog QNN) |
+| `AionInstructPreview.LanguageModel.Framework_1.1.0.2_x64.msix` | x64 Intel Lunar Lake (catalog OpenVINO) or AMD Ryzen AI (catalog VitisAI) |
 | `AionInstructPreview.Text.Framework.1.1.0.nupkg` | The SDK NuGet (arch-neutral) |
 | `Aion-Instruct-Preview-Pre-Release-EULA.docx` | Legal-provided terms for the validation package |
 
@@ -376,7 +379,7 @@ require their public test certificate to be trusted on the validation machine.
 
 ```powershell
 # Install the framework MSIX matching your device (ARM64 or x64).
-Add-AppxPackage .\AionInstructPreview.LanguageModel.Framework_1.1.0.0_<arch>.msix
+Add-AppxPackage .\AionInstructPreview.LanguageModel.Framework_1.1.0.2_<arch>.msix
 
 # Verify it installed.
 Get-AppxPackage Microsoft.AionInstructPreview.Framework.1.0
@@ -872,7 +875,7 @@ Get-Content diag.txt | Set-Clipboard
 ```
 
 Initialization requires a compatible NPU provider. Check the WinML catalog package and NPU
-driver: QNN `2.2480.49+` or OpenVINO `1.8.95+`. AMD support is coming soon. Include the
+driver: QNN `2.2480.49+`, OpenVINO `1.8.95+`, or VitisAI `1.8.80+`. Include the
 diagnostic's selected EP, catalog version, and loaded-module paths in a bug report.
 
 ---

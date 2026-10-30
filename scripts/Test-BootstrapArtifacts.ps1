@@ -15,7 +15,8 @@ if ($errors.Count) { throw 'Bootstrap.ps1 contains syntax errors.' }
 foreach ($name in @('Assert-SdkNuGetCacheMatches', 'Assert-LocalFrameworkMatches',
         'Assert-FrameworkMsixIdentity', 'Get-FrameworkMsixIdentity',
         'Assert-MicrosoftSignedPackage', 'Assert-MicrosoftSignedNuGet',
-        'Get-X64ProviderRequirement', 'Select-FrameworkRegistration', 'Ensure-Directory')) {
+        'Get-X64ProviderRequirement', 'Select-FrameworkRegistration', 'Ensure-Directory',
+        'Update-SdkNuGet')) {
     $definition = $ast.Find({
         param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -52,7 +53,13 @@ if ($intelRequirement.Label -ne 'OpenVINO' -or
     $intelRequirement.Minimum -ne [version]'1.8.95.0') {
     throw 'Intel provider requirements are incorrect.'
 }
-Assert-Rejected { Get-X64ProviderRequirement 'AMD Ryzen AI' } 'AMD support is coming soon'
+foreach ($processor in @('AMD Ryzen AI', 'Ryzen AI', 'Strix')) {
+    $amdRequirement = Get-X64ProviderRequirement $processor
+    if ($amdRequirement.Label -ne 'VitisAI' -or
+        $amdRequirement.Minimum -ne [version]'1.8.80.0') {
+        throw 'AMD provider requirements are incorrect.'
+    }
+}
 
 $registrations = @(
     [pscustomobject]@{ Version = '1.0.0.2'; InstallLocation = 'old' },
@@ -66,10 +73,18 @@ if ($selection.Target.InstallLocation -ne 'target' -or
 }
 
 $bootstrapText = [IO.File]::ReadAllText((Join-Path $root 'Bootstrap.ps1'))
-$amdGate = $bootstrapText.IndexOf('$x64Requirement = Get-X64ProviderRequirement')
+$providerSelection = $bootstrapText.IndexOf('$x64Requirement = Get-X64ProviderRequirement')
 $frameworkDownload = $bootstrapText.IndexOf('# --- 4. Framework MSIX state')
-if ($amdGate -lt 0 -or $frameworkDownload -lt 0 -or $amdGate -gt $frameworkDownload) {
-    throw 'The unsupported-AMD gate must run before framework download and installation.'
+if ($providerSelection -lt 0 -or $frameworkDownload -lt 0 -or $providerSelection -gt $frameworkDownload) {
+    throw 'Hardware provider selection must run before framework download and installation.'
+}
+$sdkStage = $bootstrapText.Substring($bootstrapText.IndexOf('# --- 5. SDK nupkg'))
+$download = $sdkStage.IndexOf('Invoke-WebRequest')
+$verify = $sdkStage.IndexOf('Assert-MicrosoftSignedNuGet $sourceNupkg')
+$replace = $sdkStage.IndexOf('Update-SdkNuGet -Source $sourceNupkg')
+if ($download -lt 0 -or $verify -lt $download -or $replace -lt $verify -or
+    $sdkStage -notmatch '-RefreshStaleCache:\(!\$useLocalAssets\)') {
+    throw 'Published SDK must be downloaded and verified before replacement and stale-cache refresh.'
 }
 
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ('AionBootstrapTests-' + [guid]::NewGuid())
@@ -87,9 +102,19 @@ try {
         '<configuration><config><add key="globalPackagesFolder" value="configured-cache" /></config></configuration>')
     $package = Join-Path $temporary 'input.nupkg'
     [IO.File]::WriteAllText($package, 'new SDK')
+    $localPackage = Join-Path $missingDirectory 'sdk.nupkg'
+    if (-not (Update-SdkNuGet $package $localPackage)) { throw 'Missing SDK was not copied.' }
+    if (Update-SdkNuGet $package $localPackage) { throw 'Matching SDK should not be replaced.' }
+    [IO.File]::WriteAllText($localPackage, 'old SDK')
+    if (-not (Update-SdkNuGet $package $localPackage) -or
+        (Get-FileHash $localPackage).Hash -ne (Get-FileHash $package).Hash) {
+        throw 'Same-version SDK was not refreshed by content.'
+    }
     $cacheRelative = 'aioninstructpreview.text.framework\1.0.1\aioninstructpreview.text.framework.1.0.1.nupkg'
     $cached = Join-Path (Join-Path $temporary 'configured-cache') $cacheRelative
     New-Item -ItemType Directory -Path (Split-Path $cached -Parent) -Force | Out-Null
+    $otherVersion = Join-Path (Split-Path (Split-Path $cached -Parent) -Parent) '1.0.2'
+    New-Item -ItemType Directory -Path $otherVersion | Out-Null
     $check = @{
         PackagePath = $package
         Version = '1.0.1'
@@ -99,8 +124,19 @@ try {
     Assert-SdkNuGetCacheMatches @check
     [IO.File]::WriteAllText($cached, 'stale SDK')
     Assert-Rejected { Assert-SdkNuGetCacheMatches @check } 'contains a different Aion SDK'
+    Assert-SdkNuGetCacheMatches @check -RefreshStaleCache
+    if (Test-Path -LiteralPath (Split-Path $cached -Parent)) {
+        throw 'Stale configured SDK cache was not invalidated.'
+    }
+    if (-not (Test-Path -LiteralPath $otherVersion)) {
+        throw 'Cache refresh removed another SDK version.'
+    }
+    New-Item -ItemType Directory -Path (Split-Path $cached -Parent) -Force | Out-Null
     Copy-Item -LiteralPath $package -Destination $cached -Force
-    Assert-SdkNuGetCacheMatches @check
+    Assert-SdkNuGetCacheMatches @check -RefreshStaleCache
+    if (-not (Test-Path -LiteralPath $cached)) {
+        throw 'Cache refresh removed a matching SDK.'
+    }
 
     $env:NUGET_PACKAGES = Join-Path $temporary 'environment-cache'
     [IO.File]::WriteAllText($cached, 'stale config SDK ignored by environment override')
@@ -109,6 +145,11 @@ try {
     New-Item -ItemType Directory -Path (Split-Path $environmentPackage -Parent) -Force | Out-Null
     [IO.File]::WriteAllText($environmentPackage, 'stale environment SDK')
     Assert-Rejected { Assert-SdkNuGetCacheMatches @check } 'contains a different Aion SDK'
+    Assert-SdkNuGetCacheMatches @check -RefreshStaleCache
+    if (Test-Path -LiteralPath (Split-Path $environmentPackage -Parent)) {
+        throw 'Stale environment SDK cache was not invalidated.'
+    }
+    New-Item -ItemType Directory -Path (Split-Path $environmentPackage -Parent) -Force | Out-Null
     Copy-Item -LiteralPath $package -Destination $environmentPackage -Force
     Assert-SdkNuGetCacheMatches @check
 
@@ -166,7 +207,7 @@ try {
     $script:nugetVerifyExitCode = 1
     Assert-Rejected { Assert-MicrosoftSignedNuGet $package } 'does not have the expected Microsoft NuGet signature'
 
-    Write-Output 'PASS: cache, framework identity/content, MSIX signature, and NuGet signer checks; no packages deployed.'
+    Write-Output 'PASS: provider requirements, SDK refresh/cache invalidation, framework identity/content, MSIX signature, and NuGet signer checks; no packages deployed.'
 } finally {
     $env:NUGET_PACKAGES = $previousCache
     Remove-Item -LiteralPath $temporary -Recurse -Force

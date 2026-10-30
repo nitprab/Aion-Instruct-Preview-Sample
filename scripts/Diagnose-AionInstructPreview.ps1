@@ -103,9 +103,9 @@ if ($ci) {
     } elseif ($arch -eq 'x64' -and $procName -match 'Intel|Core\s*Ultra|Lunar|Arrow|Meteor') {
         Write-Check PASS 'Intel x64 -- catalog OpenVINO NPU path expected' $detail
     } elseif ($arch -eq 'x64' -and $procName -match 'AMD|Ryzen|Strix') {
-        Write-Check WARN 'AMD support is coming soon' $detail
+        Write-Check PASS 'AMD x64 -- catalog VitisAI NPU path expected' $detail
     } elseif ($arch -eq 'x64') {
-        Write-Check WARN 'x64 host, but the processor name does not match a supported Intel NPU' $detail
+        Write-Check WARN 'x64 host, but the processor name does not match a supported Intel or AMD NPU' $detail
     } else {
         Write-Check WARN ('Unexpected architecture: ' + $rawArch) $detail
     }
@@ -185,7 +185,7 @@ if ($arch -eq 'ARM64') {
                   -Friendly 'Intel OpenVINO catalog execution provider' `
                   -MinVersion '1.8.95.0'
 } elseif ($arch -eq 'x64' -and $procName -match 'AMD|Ryzen|Strix') {
-    Write-Check WARN 'AMD support is coming soon; provider readiness was not evaluated'
+    Write-Check INFO 'VitisAI EP 1.8.80 or newer will be acquired by the framework on first model load if needed'
 }
 # The packaged WinUI app is optional: the console and WPF samples are equally valid
 # consumers, and a developer using only those should not get a hard failure here.
@@ -587,7 +587,7 @@ if ($noAppToCapture) {
                 '^no-npu-ep-available$' {
                     Write-Check FAIL ("SDK found no compatible NPU EP; CPU fallback is not supported. " +
                         'Verify the catalog provider version and NPU driver: QNN 2.2480.49+, ' +
-                        'OpenVINO 1.8.95+. AMD support is coming soon.')
+                        'OpenVINO 1.8.95+, VitisAI 1.8.80+.')
                 }
                 '^no-catalog$' {
                     Write-Check FAIL ('SDK could not enumerate the WinML catalog; CPU fallback is not supported. ' +

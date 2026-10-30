@@ -2,7 +2,7 @@
 
 You are working in the **consumer sample** for the **Aion Instruct Preview SDK**: an on-device
 language model that runs locally on the Copilot+ PC NPU — catalog QNN on Snapdragon (ARM64),
-catalog OpenVINO on Intel (x64), with AMD support coming soon. A compatible NPU is required (no
+catalog OpenVINO on Intel (x64), and catalog VitisAI on AMD (x64). A compatible NPU is required (no
 CPU fallback, no cloud calls).
 This repo shows a
 third-party developer how to (1) consume the SDK's framework package, (2) wire it into their own
@@ -57,7 +57,7 @@ release, drops the SDK NuGet into `./nuget-local/`, then builds and launches):
 ```
 
 **Manual build + run** (packaged WinUI app). Builds for **ARM64** (Snapdragon/QNN) and **x64**
-(Intel/OpenVINO; AMD support is coming soon) — `-p:Platform=ARM64` or `-p:Platform=x64`. The csproj defaults `$(Platform)` to
+(Intel/OpenVINO or AMD/VitisAI) — `-p:Platform=ARM64` or `-p:Platform=x64`. The csproj defaults `$(Platform)` to
 the box's *native* arch, normalising `AMD64` to `x64`, so a bare `dotnet build` does the right thing.
 
 ```powershell
@@ -176,7 +176,7 @@ API reference: README → [API surface used](../README.md#api-surface-used).
 
 ## Hard rules / gotchas (do not violate)
 
-- **Snapdragon/QNN and Intel LNL/OpenVINO are supported; AMD support is coming soon.** The csproj defaults `$(Platform)`
+- **Snapdragon/QNN, Intel LNL/OpenVINO, and AMD/VitisAI are supported.** The csproj defaults `$(Platform)`
   to the box's native arch and normalises `AMD64` to `x64` — don't break that logic.
 - **Never build under `C:\Windows\System32`** (the default dir of an elevated prompt). UAC file
   virtualization corrupts CsWinRT / XAML codegen (`cswinrt.exe exited with code 1`). Build
